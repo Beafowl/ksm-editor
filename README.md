@@ -26,22 +26,33 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
 - **Right-click** deletes whatever is under the cursor. **Select** tool drags notes,
   resizes holds (grab the tail), and moves laser points.
 - **Effects**: select an **FX hold** → choose effect + parameter in the Inspector
-  (`Retrigger;8`, `Gate;16`, `Flanger`, `BitCrusher;10`, …). Select a **laser** →
-  toggle 2× wide and set the filter (`peak` / `lpf1` / `hpf1` / `bitc`).
-- **+BPM** inserts a BPM change at the current position.
+  (`Retrigger;8`, `Gate;16`, `Flanger`, `BitCrusher;10`, …). Custom `#define_fx` /
+  `#define_filter` effects from the chart appear in the dropdowns too. Select a
+  **laser** → toggle 2× wide and set the filter (`peak` / `lpf1` / `hpf1` / `bitc`).
+- **Spins**: select a **laser point** → add a lane spin / half-spin / swing with a
+  length (put them on slams).
+- **Timing & camera**: **+BPM** and **+Sig** insert tempo / time-signature changes at
+  the cursor; **+Cmd** inserts raw commands (`zoom_top`, `zoom_bottom`, `zoom_side`,
+  `tilt`, `stop`, …). The **Events** panel lists everything in the current measure
+  with one-click delete.
 - `Ctrl+Z` / `Ctrl+Y` undo/redo · `Del` delete selection · `Ctrl+S` save.
 
 ## Navigation & playback
 
-- `Space` play/pause · scroll wheel steps by the snap division (`Ctrl+wheel` zooms).
+- `Space` play/pause · scroll wheel steps by the snap division (`Ctrl+wheel` changes
+  lane speed).
 - `↑`/`↓` step by snap, `PgUp`/`PgDn` by measure, `Home`/`End` jump to start/last note.
-- Click or drag the bottom timeline to jump anywhere; playback speed 25–100 %,
-  optional hitsounds and metronome.
+- Click or drag the bottom timeline to jump anywhere; playback speed 25–100 %.
+- **FX preview** (toggle in the Playback panel) plays a real-time approximation of
+  FX-hold effects (Retrigger, Gate, Wobble, Flanger, TapeStop, PitchShift, Echo,
+  SideChain, BitCrusher, Phaser) and sweeps a filter with the lasers
+  (`peak`/`lpf1`/`hpf1`). The in-game DSP will sound richer — treat it as a sketch.
+- Song, hitsound and metronome volumes each have their own slider.
 
 ## Notes
 
-- Charts round-trip safely: lane spins, `zoom_*`/`tilt`/`stop` lines and other
-  unrecognized commands in existing charts are preserved on save.
-- FX/laser effects are chart data — the editor shows them but does not render them audibly.
-- Files: `ksh.js` (format + timing), `audio.js` (Web Audio engine), `render.js`
-  (highway + timeline), `app.js` (editor logic/UI), `index.html`/`style.css` (shell).
+- Charts round-trip safely: unrecognized commands in existing charts are preserved
+  verbatim on save (verified against the bundled Show and INTERNET YAMERO charts).
+- Files: `ksh.js` (format + timing), `audio.js` (Web Audio engine), `fxdsp.js`
+  (FX/laser audio preview), `render.js` (highway + timeline), `app.js`
+  (editor logic/UI), `index.html`/`style.css` (shell).

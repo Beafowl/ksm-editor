@@ -140,10 +140,13 @@
         <li><b>Right-click</b> (any tool) deletes what's under the cursor.</li>
         <li><b>Select tool:</b> drag notes to move, drag a hold's tail to resize, drag laser points freely.</li>
       </ul>
-      <h4>Effects</h4>
+      <h4>Effects &amp; events</h4>
       <ul>
-        <li>Select an <b>FX hold</b> → pick effect + parameter in the Inspector (Retrigger;8, Gate;16, Flanger, …).</li>
-        <li>Select a <b>laser</b> → toggle 2× wide (laserrange) and set the filter type (peak / lpf1 / hpf1 / bitc).</li>
+        <li>Select an <b>FX hold</b> → pick effect + parameter in the Inspector (Retrigger;8, Gate;16, Flanger, …). Custom <code>#define_fx</code> effects from the chart appear too.</li>
+        <li>Select a <b>laser</b> → toggle 2× wide (laserrange) and set the filter type (peak / lpf1 / hpf1 / bitc / custom).</li>
+        <li>Select a <b>laser point</b> → add a lane <b>spin / half-spin / swing</b> with a length (place them on slams).</li>
+        <li><b>+BPM</b> / <b>+Sig</b> insert tempo &amp; time-signature changes at the cursor; <b>+Cmd</b> inserts raw lines (zoom_top, tilt, stop, …).</li>
+        <li>The <b>Events</b> panel lists everything in the current measure — delete with ×.</li>
       </ul>
     </div>
     <div>
@@ -165,8 +168,9 @@
       </ul>
       <h4>Notes</h4>
       <ul>
-        <li>Lane spins and unknown lines (zoom, tilt, …) in loaded charts are preserved on save.</li>
-        <li>FX/laser effects are saved to the chart; the editor previews them visually, not audibly.</li>
+        <li>Unknown chart lines are preserved verbatim on save.</li>
+        <li><b>FX preview</b> plays an approximation of hold effects and the laser filter during playback (toggle in the Playback panel). The game's own DSP will sound richer.</li>
+        <li>Song, hitsound and metronome volumes are independent sliders.</li>
       </ul>
     </div>
   </div>
