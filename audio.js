@@ -53,7 +53,7 @@ const AudioEng = {
     const src = this.ctx.createBufferSource();
     src.buffer = this.buffer;
     src.playbackRate.value = this.rate;
-    src.connect(this.musicGain);
+    src.connect(typeof FXDSP !== "undefined" ? FXDSP.input() : this.musicGain);
     const now = this.ctx.currentTime;
     if (fromMs >= 0) src.start(now, Math.min(fromMs, this.durationMs()) / 1000);
     else src.start(now + (-fromMs / 1000) / this.rate, 0);

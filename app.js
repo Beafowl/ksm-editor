@@ -15,7 +15,7 @@ const ED = {
   undoStack: [], redoStack: [],
   dirHandle: null, kshHandle: null, kshName: "", kshFiles: [],
   volMusic: 0.8, volHit: 0.7, volMet: 0.7,
-  opts: { metronome: false, hitsounds: true, waveform: true },
+  opts: { metronome: false, hitsounds: true, waveform: true, fxPreview: true },
   dom: {}, G: null,
 
   snapTicks() { return KSH.WHOLE_TICKS / this.snapDiv; },
@@ -408,6 +408,89 @@ function deleteSelection() {
   markEdit(); setSel(null);
 }
 
+/* ----------------------- FX preview plan ----------------------- */
+
+const BUILTIN_FX = { Retrigger: 8, Gate: 16, Flanger: null, PitchShift: null, BitCrusher: null,
+  Phaser: null, Wobble: 12, TapeStop: null, Echo: 4, SideChain: 4 };
+
+// #define_fx / #define_filter lines (header or body) -> { fx: {name: {type, div}}, filter: {...} }
+function parseDefines(chart) {
+  const defs = { fx: {}, filter: {} };
+  const scan = s => {
+    const m = /^#define_(fx|filter)\s+(\S+)\s+type=([A-Za-z]+)(.*)$/.exec(s);
+    if (!m) return;
+    let div = null;
+    const pm = /(?:updatePeriod|waveLength|period)=1\/(\d+)/.exec(m[4]);
+    if (pm) div = parseInt(pm[1]);
+    defs[m[1]][m[2]] = { type: m[3], div };
+  };
+  for (const k of chart.metaKeys) if (k.startsWith("#define_")) scan(k + "=" + (chart.meta[k] || ""));
+  for (const o of chart.other) scan(o.s);
+  return defs;
+}
+
+// effect string ("Retrigger;8", "ret", custom;param) -> {type, div, semi} or null
+function resolveEffect(str, defs) {
+  const [name, p] = (str || "").split(";");
+  if (!name) return null;
+  let type = null, div = null, semi = null;
+  if (name in BUILTIN_FX) type = name;
+  else if (defs.fx[name]) { type = defs.fx[name].type; div = defs.fx[name].div; }
+  if (!type || !(type in BUILTIN_FX)) return null;
+  if (p != null && p !== "") {
+    const pv = parseFloat(p);
+    if (isFinite(pv)) { if (type === "PitchShift") semi = pv; else if (type !== "BitCrusher") div = pv; }
+  }
+  if (type === "PitchShift" && semi === null) semi = 12;
+  if (div === null) div = BUILTIN_FX[type] || 8;
+  return { type, div, semi };
+}
+
+function buildFxRegions() {
+  const defs = parseDefines(ED.chart);
+  const out = [];
+  for (let s = 0; s < 2; s++)
+    for (const n of ED.chart.fx[s]) {
+      if (!(n.l > 0) || !n.fx) continue;
+      const r = resolveEffect(n.fx, defs);
+      if (!r) continue;
+      const bpm = ED.timing.bpmAt(n.y);
+      out.push({
+        t0: ED.timing.tickToMs(n.y),
+        t1: ED.timing.tickToMs(n.y + n.l),
+        type: r.type,
+        I: 240000 / bpm / Math.max(1, r.div),
+        semi: r.semi,
+      });
+    }
+  out.sort((a, b) => a.t0 - b.t0);
+  return out;
+}
+
+// current laser filter state for the follower (null when no laser under cursor)
+function laserStateNow() {
+  const tick = ED.timing.msToTick(ED.curMs);
+  let drive = -1;
+  for (let s = 0; s < 2; s++)
+    for (const seg of ED.chart.lasers[s]) {
+      const pts = seg.points;
+      if (tick < pts[0].y || tick > pts[pts.length - 1].y) continue;
+      let v = pts[0].v;
+      for (let i = 0; i + 1 < pts.length; i++)
+        if (tick >= pts[i].y && tick <= pts[i + 1].y) {
+          const f = (tick - pts[i].y) / Math.max(1, pts[i + 1].y - pts[i].y);
+          v = pts[i].v + (pts[i + 1].v - pts[i].v) * f;
+          break;
+        }
+      const d = s === 0 ? v : 1 - v;
+      if (d > drive) drive = d;
+    }
+  if (drive < 0) return null;
+  let type = ED.chart.meta.filtertype || "peak";
+  for (const f of ED.chart.filters) { if (f.y <= tick) type = f.v; else break; }
+  return { drive, type };
+}
+
 /* --------------------------- playback --------------------------- */
 
 let hitEvents = [], schedPtr = 0, metNextTick = null;
@@ -432,6 +515,8 @@ function resetSched() {
   schedPtr = 0;
   while (schedPtr < hitEvents.length && hitEvents[schedPtr].ms <= pos) schedPtr++;
   metNextTick = nextBeatTick(ED.timing.msToTick(pos));
+  if (AudioEng.playing && ED.opts.fxPreview) FXDSP.apply(buildFxRegions(), pos);
+  else FXDSP.clear();
 }
 function nextBeatTick(fromTick) {
   const m = KSH.measureAt(ED.measures, Math.max(0, fromTick));
@@ -478,6 +563,8 @@ function startPlayback() {
 function pausePlayback() {
   ED.curMs = Math.min(AudioEng.positionMs(), ED.domainEndMs());
   AudioEng.stop();
+  FXDSP.clear();
+  FXDSP.updateLaser(null);
   ED.playing = false;
   ED.dom.btnPlay.textContent = "▶";
 }
@@ -496,7 +583,10 @@ function frame() {
   if (ED.playing) {
     ED.curMs = AudioEng.positionMs();
     if (ED.curMs >= ED.domainEndMs()) pausePlayback();
-    else scheduler();
+    else {
+      scheduler();
+      if (ED.opts.fxPreview) FXDSP.updateLaser(laserStateNow());
+    }
   }
   Render.draw();
   updateTimeDisplay();
@@ -773,7 +863,7 @@ function init() {
   const d = ED.dom;
   for (const id of ["highway", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
     "inBpm", "inOffset", "inZoom", "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
-    "chkMetronome", "chkHitsounds", "chkWaveform", "chkWide",
+    "chkMetronome", "chkHitsounds", "chkWaveform", "chkWide", "chkFxPreview",
     "inspNone", "inspNote", "inspNoteInfo", "fxEffectBox", "selFxType", "inFxParam",
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
     "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm",
@@ -853,6 +943,11 @@ function init() {
   d.chkMetronome.addEventListener("change", () => { ED.opts.metronome = d.chkMetronome.checked; if (ED.playing) resetSched(); });
   d.chkHitsounds.addEventListener("change", () => { ED.opts.hitsounds = d.chkHitsounds.checked; });
   d.chkWaveform.addEventListener("change", () => { ED.opts.waveform = d.chkWaveform.checked; });
+  d.chkFxPreview.addEventListener("change", () => {
+    ED.opts.fxPreview = d.chkFxPreview.checked;
+    if (!ED.opts.fxPreview) FXDSP.updateLaser(null);
+    if (ED.playing) resetSched();
+  });
   d.chkWide.addEventListener("change", () => { ED.laserWideDefault = d.chkWide.checked; });
 
   // timing inputs
