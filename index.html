@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KSM Chart Editor</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="group">
+    <button id="btnOpenFolder" title="Open a song folder (Chrome/Edge) — loads chart + audio together">📂 Folder</button>
+    <button id="btnOpenKsh" title="Open a single .ksh file">Open .ksh</button>
+    <button id="btnLoadAudio" title="Load the song audio (ogg/mp3/wav)">🎵 Audio</button>
+    <button id="btnNew" title="New chart">New</button>
+    <button id="btnSave" title="Save chart (Ctrl+S)">💾 Save</button>
+    <input type="file" id="fileKsh" accept=".ksh" hidden>
+    <input type="file" id="fileAudio" accept="audio/*,.ogg,.mp3,.wav,.flac,.m4a" hidden>
+  </div>
+  <select id="selDiff" style="display:none" title="Switch difficulty"></select>
+  <div id="songTitle">No chart loaded</div>
+  <div class="group right">
+    <label>BPM <input id="inBpm" type="number" step="0.001" min="1" style="width:70px"></label>
+    <button id="btnInsBpm" title="Insert a BPM change at the current position">+BPM</button>
+    <label>Offset <input id="inOffset" type="number" step="1" style="width:64px"> ms</label>
+    <button id="btnMeta" title="Edit song metadata">Metadata</button>
+    <button id="btnHelp" title="Shortcuts &amp; help">?</button>
+  </div>
+</header>
+
+<main id="main">
+  <div id="highwayWrap"><canvas id="highway"></canvas></div>
+
+  <aside id="sidebar">
+    <section>
+      <h3>Tools</h3>
+      <div class="tools">
+        <button class="toolbtn" data-tool="select">Select <kbd>1</kbd></button>
+        <button class="toolbtn active" data-tool="bt">BT <kbd>2</kbd></button>
+        <button class="toolbtn" data-tool="fx">FX <kbd>3</kbd></button>
+        <button class="toolbtn laserl" data-tool="laserL">Laser L <kbd>4</kbd></button>
+        <button class="toolbtn laserr" data-tool="laserR">Laser R <kbd>5</kbd></button>
+      </div>
+      <label class="row"><span>Snap</span><select id="selSnap"></select></label>
+      <label class="row"><span>Zoom</span><input id="inZoom" type="range" min="0.4" max="10" step="0.2" value="2"></label>
+      <label class="chk"><input type="checkbox" id="chkWide"> New lasers 2× wide</label>
+    </section>
+
+    <section id="inspector">
+      <h3>Inspector</h3>
+      <div id="inspNone" class="hint">Nothing selected.<br>
+        <b>Select</b> tool: click a note / laser.<br>
+        Right-click deletes. Drag hold tail to resize.</div>
+      <div id="inspNote" style="display:none">
+        <div id="inspNoteInfo" class="info"></div>
+        <div id="fxEffectBox">
+          <label class="row"><span>Effect</span><select id="selFxType"></select></label>
+          <label class="row"><span>Param</span><input id="inFxParam" type="number" step="1" style="width:64px"></label>
+        </div>
+      </div>
+      <div id="inspLaser" style="display:none">
+        <div id="inspLaserInfo" class="info"></div>
+        <label class="chk"><input type="checkbox" id="chkSegWide"> 2× wide (laserrange)</label>
+        <label class="row"><span>Filter</span><select id="selFilter"></select></label>
+        <div class="hint">Filter (filtertype) is applied at the laser's start.</div>
+      </div>
+      <button id="btnDelSel" class="danger">Delete selection <kbd>Del</kbd></button>
+    </section>
+
+    <section>
+      <h3>Playback</h3>
+      <label class="row"><span>Speed</span><select id="selRate"></select></label>
+      <label class="row"><span>Volume</span><input id="inVol" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+      <label class="chk"><input type="checkbox" id="chkHitsounds" checked> Hitsounds</label>
+      <label class="chk"><input type="checkbox" id="chkMetronome"> Metronome</label>
+      <label class="chk"><input type="checkbox" id="chkWaveform" checked> Waveform</label>
+    </section>
+  </aside>
+</main>
+
+<footer id="bottombar">
+  <button id="btnPlay" title="Play / pause (Space)">▶</button>
+  <div id="timeBox">
+    <div id="timeDisp">00:00.000 / 00:00.000</div>
+    <div id="beatDisp">#001 · beat 1</div>
+  </div>
+  <canvas id="timeline"></canvas>
+</footer>
+
+<div id="toast"></div>
+
+<dialog id="metaModal">
+  <form method="dialog">
+    <h3>Chart metadata</h3>
+    <label>Title <input id="mTitle" type="text"></label>
+    <label>Artist <input id="mArtist" type="text"></label>
+    <label>Effector <input id="mEffect" type="text"></label>
+    <label>Jacket <input id="mJacket" type="text" placeholder="jacket.png"></label>
+    <label>Difficulty <select id="mDifficulty"></select></label>
+    <label>Level <input id="mLevel" type="number" min="1" max="20"></label>
+    <label>Music file <input id="mMusic" type="text" placeholder="song.ogg"></label>
+    <label>Music volume <input id="mMvol" type="number" min="0" max="100"></label>
+    <div class="btnrow">
+      <button id="btnMetaSave" class="primary">Save</button>
+      <button id="btnMetaCancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="helpModal">
+  <h3>KSM Chart Editor — Help</h3>
+  <div class="help2col">
+    <div>
+      <h4>Getting started</h4>
+      <ol>
+        <li><b>📂 Folder</b> opens a song folder (chart + audio auto-load, saving writes back). Or <b>Open .ksh</b> + <b>🎵 Audio</b> separately, or drag &amp; drop files.</li>
+        <li>For a new song: <b>🎵 Audio</b>, then <b>New</b>, set <b>BPM</b> and <b>Offset</b> (ms position in the audio where beat 1 lands), then chart away.</li>
+        <li><b>💾 Save</b> writes the .ksh (or downloads it if no folder is open).</li>
+      </ol>
+      <h4>Placing objects</h4>
+      <ul>
+        <li><b>BT / FX tool:</b> click a lane = chip · click-drag upward = hold · click an existing chip = remove it.</li>
+        <li><b>Laser tools:</b> each click adds a point. Click on the <i>same row</i> = slam. <kbd>Enter</kbd>/<kbd>Esc</kbd>/double-click finishes the laser, right-click removes the last point.</li>
+        <li><b>Right-click</b> (any tool) deletes what's under the cursor.</li>
+        <li><b>Select tool:</b> drag notes to move, drag a hold's tail to resize, drag laser points freely.</li>
+      </ul>
+      <h4>Effects</h4>
+      <ul>
+        <li>Select an <b>FX hold</b> → pick effect + parameter in the Inspector (Retrigger;8, Gate;16, Flanger, …).</li>
+        <li>Select a <b>laser</b> → toggle 2× wide (laserrange) and set the filter type (peak / lpf1 / hpf1 / bitc).</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Navigation</h4>
+      <ul>
+        <li><kbd>Space</kbd> play / pause</li>
+        <li><kbd>Scroll</kbd> step by snap · <kbd>Ctrl+Scroll</kbd> zoom</li>
+        <li><kbd>↑</kbd>/<kbd>↓</kbd> step by snap · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> measure</li>
+        <li><kbd>Home</kbd>/<kbd>End</kbd> start / last note</li>
+        <li>Click / drag the bottom timeline to jump anywhere</li>
+      </ul>
+      <h4>Tools</h4>
+      <ul>
+        <li><kbd>1</kbd> Select · <kbd>2</kbd> BT · <kbd>3</kbd> FX · <kbd>4</kbd> Laser L · <kbd>5</kbd> Laser R</li>
+      </ul>
+      <h4>Editing</h4>
+      <ul>
+        <li><kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+Y</kbd> redo · <kbd>Del</kbd> delete selection · <kbd>Ctrl+S</kbd> save</li>
+      </ul>
+      <h4>Notes</h4>
+      <ul>
+        <li>Lane spins and unknown lines (zoom, tilt, …) in loaded charts are preserved on save.</li>
+        <li>FX/laser effects are saved to the chart; the editor previews them visually, not audibly.</li>
+      </ul>
+    </div>
+  </div>
+  <form method="dialog" class="btnrow"><button class="primary">Close</button></form>
+</dialog>
+
+<script src="ksh.js"></script>
+<script src="audio.js"></script>
+<script src="render.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
