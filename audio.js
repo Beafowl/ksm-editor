@@ -18,6 +18,8 @@ const AudioEng = {
   peaks: null,       // Float32Array of |peak| per bin
   peakMs: 4,         // ms per bin
 
+  metGain: null,
+
   ensureCtx() {
     if (this.ctx) return;
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -27,6 +29,9 @@ const AudioEng = {
     this.clickGain = this.ctx.createGain();
     this.clickGain.gain.value = 0.5;
     this.clickGain.connect(this.ctx.destination);
+    this.metGain = this.ctx.createGain();
+    this.metGain.gain.value = 0.5;
+    this.metGain.connect(this.ctx.destination);
   },
 
   async loadArrayBuffer(ab, name) {
@@ -79,6 +84,7 @@ const AudioEng = {
   setRate(r) { this.rate = r; },
   setMusicVolume(v) { this.ensureCtx(); this.musicGain.gain.value = Math.max(0, Math.min(1, v)); },
   setClickVolume(v) { this.ensureCtx(); this.clickGain.gain.value = Math.max(0, Math.min(1, v)); },
+  setMetVolume(v) { this.ensureCtx(); this.metGain.gain.value = Math.max(0, Math.min(1, v)); },
 
   buildPeaks() {
     const buf = this.buffer;
@@ -136,7 +142,7 @@ const AudioEng = {
     if (!this.ctx) return;
     const src = this.ctx.createBufferSource();
     src.buffer = this._clickBuf(type);
-    src.connect(this.clickGain);
+    src.connect(type === "methi" || type === "metlo" ? this.metGain : this.clickGain);
     src.start(Math.max(ctxTime, this.ctx.currentTime));
   },
 };

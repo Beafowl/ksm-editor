@@ -43,7 +43,7 @@
         <button class="toolbtn laserr" data-tool="laserR">Laser R <kbd>5</kbd></button>
       </div>
       <label class="row"><span>Snap</span><select id="selSnap"></select></label>
-      <label class="row"><span>Zoom</span><input id="inZoom" type="range" min="0.4" max="10" step="0.2" value="2"></label>
+      <label class="row"><span>Lane Speed</span><input id="inZoom" type="range" min="0.4" max="10" step="0.2" value="2"></label>
       <label class="chk"><input type="checkbox" id="chkWide"> New lasers 2× wide</label>
     </section>
 
@@ -71,7 +71,9 @@
     <section>
       <h3>Playback</h3>
       <label class="row"><span>Speed</span><select id="selRate"></select></label>
-      <label class="row"><span>Volume</span><input id="inVol" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+      <label class="row"><span>Song</span><input id="inVolMusic" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+      <label class="row"><span>Hitsounds</span><input id="inVolHit" type="range" min="0" max="1" step="0.05" value="0.7"></label>
+      <label class="row"><span>Metronome</span><input id="inVolMet" type="range" min="0" max="1" step="0.05" value="0.7"></label>
       <label class="chk"><input type="checkbox" id="chkHitsounds" checked> Hitsounds</label>
       <label class="chk"><input type="checkbox" id="chkMetronome"> Metronome</label>
       <label class="chk"><input type="checkbox" id="chkWaveform" checked> Waveform</label>
@@ -135,7 +137,7 @@
       <h4>Navigation</h4>
       <ul>
         <li><kbd>Space</kbd> play / pause</li>
-        <li><kbd>Scroll</kbd> step by snap · <kbd>Ctrl+Scroll</kbd> zoom</li>
+        <li><kbd>Scroll</kbd> step by snap · <kbd>Ctrl+Scroll</kbd> lane speed</li>
         <li><kbd>↑</kbd>/<kbd>↓</kbd> step by snap · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> measure</li>
         <li><kbd>Home</kbd>/<kbd>End</kbd> start / last note</li>
         <li>Click / drag the bottom timeline to jump anywhere</li>

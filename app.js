@@ -14,7 +14,7 @@ const ED = {
   chartVersion: 0, dirty: false,
   undoStack: [], redoStack: [],
   dirHandle: null, kshHandle: null, kshName: "", kshFiles: [],
-  userVol: 0.8,
+  volMusic: 0.8, volHit: 0.7, volMet: 0.7,
   opts: { metronome: false, hitsounds: true, waveform: true },
   dom: {}, G: null,
 
@@ -484,8 +484,9 @@ function pausePlayback() {
 
 function applyVolumes() {
   const mvol = parseFloat(ED.chart.meta.mvol);
-  AudioEng.setMusicVolume((isFinite(mvol) ? mvol : 75) / 100 * ED.userVol);
-  AudioEng.setClickVolume(0.6 * ED.userVol);
+  AudioEng.setMusicVolume((isFinite(mvol) ? mvol : 75) / 100 * ED.volMusic);
+  AudioEng.setClickVolume(0.8 * ED.volHit);
+  AudioEng.setMetVolume(0.8 * ED.volMet);
 }
 
 /* ------------------------- render loop ------------------------- */
@@ -771,7 +772,7 @@ function $(id) { return document.getElementById(id); }
 function init() {
   const d = ED.dom;
   for (const id of ["highway", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
-    "inBpm", "inOffset", "inZoom", "selSnap", "selRate", "inVol", "selDiff",
+    "inBpm", "inOffset", "inZoom", "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
     "chkMetronome", "chkHitsounds", "chkWaveform", "chkWide",
     "inspNone", "inspNote", "inspNoteInfo", "fxEffectBox", "selFxType", "inFxParam",
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
@@ -844,7 +845,9 @@ function init() {
     AudioEng.setRate(parseFloat(d.selRate.value));
     if (ED.playing) { AudioEng.play(ED.curMs = AudioEng.positionMs()); resetSched(); }
   });
-  d.inVol.addEventListener("input", () => { ED.userVol = parseFloat(d.inVol.value); applyVolumes(); });
+  d.inVolMusic.addEventListener("input", () => { ED.volMusic = parseFloat(d.inVolMusic.value); applyVolumes(); });
+  d.inVolHit.addEventListener("input", () => { ED.volHit = parseFloat(d.inVolHit.value); applyVolumes(); });
+  d.inVolMet.addEventListener("input", () => { ED.volMet = parseFloat(d.inVolMet.value); applyVolumes(); });
   d.selSnap.addEventListener("change", () => { ED.snapDiv = parseInt(d.selSnap.value); });
   d.inZoom.addEventListener("input", () => { ED.zoom = parseFloat(d.inZoom.value); });
   d.chkMetronome.addEventListener("change", () => { ED.opts.metronome = d.chkMetronome.checked; if (ED.playing) resetSched(); });
