@@ -260,6 +260,25 @@ function drawHighway() {
     ctx.fillStyle = COL.spin;
     ctx.fillText("spin " + sp.s, labX, yOfTick(sp.y) - 6);
   }
+  // camera / stop / other raw commands (grouped per tick, max 3 shown)
+  {
+    ctx.fillStyle = "rgba(150,150,175,0.75)";
+    let i = 0;
+    const others = ED.chart.other;
+    while (i < others.length) {
+      const y0 = others[i].y;
+      let j = i;
+      while (j < others.length && others[j].y === y0) j++;
+      if (y0 >= tMin && y0 <= tMax) {
+        const y = yOfTick(y0);
+        const n = Math.min(3, j - i);
+        for (let k = 0; k < n; k++)
+          ctx.fillText(others[i + k].s + (k === n - 1 && j - i > n ? `  (+${j - i - n})` : ""),
+            labX, y + 24 + k * 11);
+      }
+      i = j;
+    }
+  }
 
   // ---- selection highlight ----
   drawSelection(ctx, G);

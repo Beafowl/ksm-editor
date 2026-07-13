@@ -37,6 +37,11 @@ const FX_TYPES = [
 const FILTER_TYPES = ["peak", "lpf1", "hpf1", "bitc"];
 const SNAP_DIVS = [4, 8, 12, 16, 24, 32, 48, 64];
 const DIFFICULTIES = ["light", "challenge", "extended", "infinite"];
+const SPIN_TYPES = [
+  ["", "(none)"], ["@(", "Spin ←"], ["@)", "Spin →"],
+  ["@<", "Half spin ←"], ["@>", "Half spin →"],
+  ["S<", "Swing ←"], ["S>", "Swing →"],
+];
 
 /* ------------------------- derived state ------------------------- */
 
@@ -608,6 +613,53 @@ function updateTimeDisplay() {
     " · ♩=" + KSH.fmtNum(ED.timing.bpmAt(Math.max(0, tick)));
   if (str !== lastTimeStr) { ED.dom.timeDisp.textContent = str; lastTimeStr = str; }
   ED.dom.beatDisp.textContent = bstr;
+  renderEventList(m);
+}
+
+/* ---------------- events panel (current measure) ---------------- */
+
+let evListKey = "";
+function renderEventList(m) {
+  const key = m.idx + "|" + ED.chartVersion;
+  if (key === evListKey) return;
+  evListKey = key;
+  const el = ED.dom.eventList;
+  el.innerHTML = "";
+  const inM = e => e.y >= m.y && e.y < m.y + m.ticks;
+  const rows = [];
+  for (const b of ED.chart.bpms) if (b.y > 0 && inM(b))
+    rows.push({ y: b.y, txt: "t=" + KSH.fmtNum(b.v), del: () => { ED.chart.bpms = ED.chart.bpms.filter(x => x !== b); rebuildTiming(); syncInputsFromChart(); } });
+  for (const s of ED.chart.sigs) if (s.y > 0 && inM(s))
+    rows.push({ y: s.y, txt: `beat=${s.n}/${s.d}`, del: () => { ED.chart.sigs = ED.chart.sigs.filter(x => x !== s); rebuildTiming(); } });
+  for (const f of ED.chart.filters) if (inM(f))
+    rows.push({ y: f.y, txt: "filtertype=" + f.v, del: () => { ED.chart.filters = ED.chart.filters.filter(x => x !== f); } });
+  for (const sp of ED.chart.spins) if (inM(sp))
+    rows.push({ y: sp.y, txt: "spin " + sp.s, del: () => { ED.chart.spins = ED.chart.spins.filter(x => x !== sp); } });
+  for (const o of ED.chart.other) if (inM(o))
+    rows.push({ y: o.y, txt: o.s, del: () => { ED.chart.other = ED.chart.other.filter(x => x !== o); } });
+  rows.sort((a, b) => a.y - b.y);
+  if (!rows.length) { el.className = "hint"; el.textContent = "—"; return; }
+  el.className = "";
+  for (const r of rows.slice(0, 24)) {
+    const div = document.createElement("div");
+    div.className = "evrow";
+    const span = document.createElement("span");
+    span.className = "evtxt";
+    span.textContent = tickLabel(r.y) + "  " + r.txt;
+    span.title = r.txt;
+    const btn = document.createElement("button");
+    btn.textContent = "×";
+    btn.title = "Delete this event";
+    btn.addEventListener("click", () => { pushUndo(); r.del(); markEdit(); });
+    div.appendChild(span); div.appendChild(btn);
+    el.appendChild(div);
+  }
+  if (rows.length > 24) {
+    const p = document.createElement("div");
+    p.className = "hint";
+    p.textContent = `… +${rows.length - 24} more`;
+    el.appendChild(p);
+  }
 }
 
 /* --------------------------- inspector --------------------------- */
@@ -637,10 +689,11 @@ function updateInspector() {
     d.fxEffectBox.style.display = isFxHold ? "" : "none";
     if (isFxHold) {
       const [type, param] = (n.fx || "").split(";");
-      d.selFxType.value = FX_TYPES.some(t => t.name === type) ? type : "";
-      const def = FX_TYPES.find(t => t.name === d.selFxType.value);
-      d.inFxParam.style.display = def && def.param !== null ? "" : "none";
-      d.inFxParam.value = param !== undefined && param !== "" ? param : (def && def.param !== null ? def.param : "");
+      setSelectValue(d.selFxType, type || "");
+      const def = FX_TYPES.find(t => t.name === type);
+      const isCustom = !!type && !def;
+      d.inFxParam.style.display = (def && def.param !== null) || isCustom ? "" : "none";
+      d.inFxParam.value = param != null && param !== "" ? param : (def && def.param !== null ? def.param : "");
     }
   } else {
     const seg = sel.seg;
@@ -650,8 +703,40 @@ function updateInspector() {
       (sel.type === "laserpoint" ? ` · point ${sel.pt + 1} v=${KSH.fmtNum(pts[sel.pt].v)}` : "");
     d.chkSegWide.checked = seg.wide === 2;
     const f = ED.chart.filters.find(f => f.y === pts[0].y);
-    d.selFilter.value = f ? f.v : "";
+    setSelectValue(d.selFilter, f ? f.v : "");
+    d.spinBox.style.display = sel.type === "laserpoint" ? "" : "none";
+    if (sel.type === "laserpoint") {
+      const sp = ED.chart.spins.find(s => s.y === pts[sel.pt].y);
+      const m = sp && /^(@\(|@\)|@<|@>|S<|S>)\s*(\d*)/.exec(sp.s);
+      d.selSpin.value = m ? m[1] : "";
+      d.inSpinLen.value = m && m[2] ? m[2] : 96;
+    }
   }
+}
+
+// set a select's value, adding the option on the fly if it's unknown
+function setSelectValue(sel, value) {
+  if (value && ![...sel.options].some(o => o.value === value)) {
+    const o = document.createElement("option");
+    o.value = value; o.textContent = value + " (custom)";
+    sel.appendChild(o);
+  }
+  sel.value = value;
+}
+
+function applySpin() {
+  const sel = ED.sel;
+  if (!sel || sel.type !== "laserpoint") return;
+  const y = sel.seg.points[sel.pt].y;
+  const type = ED.dom.selSpin.value;
+  const len = Math.max(6, parseInt(ED.dom.inSpinLen.value) || 96);
+  const cur = ED.chart.spins.find(s => s.y === y);
+  const str = type ? type + len : "";
+  if ((cur ? cur.s : "") === str) return;
+  pushUndo();
+  ED.chart.spins = ED.chart.spins.filter(s => s.y !== y);
+  if (str) { ED.chart.spins.push({ y, s: str }); ED.chart.spins.sort((a, b) => a.y - b.y); }
+  markEdit();
 }
 
 function applyFxEffect() {
@@ -659,20 +744,43 @@ function applyFxEffect() {
   if (!n || ED.sel.type !== "fx" || n.l === 0) return;
   const type = ED.dom.selFxType.value;
   const def = FX_TYPES.find(t => t.name === type);
-  ED.dom.inFxParam.style.display = def && def.param !== null ? "" : "none";
+  const isCustom = !!type && !def;
+  ED.dom.inFxParam.style.display = (def && def.param !== null) || isCustom ? "" : "none";
   let str = "";
   if (type) {
     str = type;
-    if (def && def.param !== null) {
-      const p = ED.dom.inFxParam.value.trim();
-      str += ";" + (p === "" ? def.param : p);
-    }
+    const p = ED.dom.inFxParam.value.trim();
+    if (def && def.param !== null) str += ";" + (p === "" ? def.param : p);
+    else if (isCustom && p !== "") str += ";" + p;
   }
   if (str !== (n.fx || "")) {
     pushUndo();
     n.fx = str;
     markEdit(); updateInspector();
   }
+}
+
+// rebuild effect/filter dropdowns from built-ins + the chart's #define lines
+function rebuildEffectOptions() {
+  const d = ED.dom;
+  const defs = parseDefines(ED.chart);
+  const fill = (sel, noneLabel, entries) => {
+    sel.innerHTML = "";
+    let o = document.createElement("option");
+    o.value = ""; o.textContent = noneLabel; sel.appendChild(o);
+    for (const [v, label] of entries) {
+      o = document.createElement("option");
+      o.value = v; o.textContent = label; sel.appendChild(o);
+    }
+  };
+  fill(d.selFxType, "(no effect)", [
+    ...FX_TYPES.map(t => [t.name, t.name]),
+    ...Object.entries(defs.fx).map(([n, def]) => [n, `${n} (${def.type})`]),
+  ]);
+  const filterNames = new Map(FILTER_TYPES.map(n => [n, n]));
+  for (const [n, def] of Object.entries(defs.filter)) filterNames.set(n, `${n} (${def.type})`);
+  for (const f of ED.chart.filters) if (f.v && !filterNames.has(f.v)) filterNames.set(f.v, f.v);
+  fill(d.selFilter, "(keep current)", [...filterNames.entries()]);
 }
 
 function applyLaserProps() {
@@ -719,6 +827,7 @@ function setChart(chart) {
   ED.curMs = 0;
   rebuildTiming();
   ED.chartVersion++;
+  rebuildEffectOptions();
   syncInputsFromChart(); updateTitle(); updateInspector();
 }
 
@@ -866,7 +975,8 @@ function init() {
     "chkMetronome", "chkHitsounds", "chkWaveform", "chkWide", "chkFxPreview",
     "inspNone", "inspNote", "inspNoteInfo", "fxEffectBox", "selFxType", "inFxParam",
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
-    "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm",
+    "spinBox", "selSpin", "inSpinLen", "eventList",
+    "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd",
     "fileKsh", "fileAudio", "metaModal", "helpModal",
     "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
     "btnMetaSave", "btnMetaCancel"])
@@ -887,18 +997,15 @@ function init() {
     d.selRate.appendChild(o);
   }
   d.selRate.value = 1;
-  {
-    let o = document.createElement("option"); o.value = ""; o.textContent = "(no effect)";
-    d.selFxType.appendChild(o);
-    for (const t of FX_TYPES) { o = document.createElement("option"); o.value = t.name; o.textContent = t.name; d.selFxType.appendChild(o); }
-    o = document.createElement("option"); o.value = ""; o.textContent = "(keep current)";
-    d.selFilter.appendChild(o);
-    for (const f of FILTER_TYPES) { o = document.createElement("option"); o.value = f; o.textContent = f; d.selFilter.appendChild(o); }
+  for (const [v, label] of SPIN_TYPES) {
+    const o = document.createElement("option"); o.value = v; o.textContent = label;
+    d.selSpin.appendChild(o);
   }
   for (const diff of DIFFICULTIES) {
     const o = document.createElement("option"); o.value = diff; o.textContent = diff;
     d.mDifficulty.appendChild(o);
   }
+  rebuildEffectOptions();
 
   // highway input
   const hw = d.highway;
@@ -978,12 +1085,75 @@ function init() {
     else { ED.chart.bpms.push({ y: tick, v }); ED.chart.bpms.sort((a, b) => a.y - b.y); }
     rebuildTiming(); markEdit(); syncInputsFromChart();
   });
+  d.btnInsSig.addEventListener("click", () => {
+    const tick = ED.timing.msToTick(ED.curMs);
+    const m = KSH.measureAt(ED.measures, Math.max(0, tick));
+    const val = prompt(`Time signature from measure ${m.idx + 1}:`, m.n + "/" + m.d);
+    if (val === null) return;
+    const mm = /^(\d+)\s*\/\s*(\d+)$/.exec(val.trim());
+    if (!mm) { toast("Enter a signature like 4/4 or 7/8"); return; }
+    const n = parseInt(mm[1]), dd = parseInt(mm[2]);
+    if (n < 1 || n > 256 || dd < 1 || (KSH.WHOLE_TICKS * n) % dd !== 0) {
+      toast("Unsupported signature (denominator must divide 192·n)"); return;
+    }
+    pushUndo();
+    // preserve each sig change's measure INDEX while the grid shifts
+    const byIdx = new Map();
+    for (const s of ED.chart.sigs) byIdx.set(KSH.measureAt(ED.measures, s.y).idx, { n: s.n, d: s.d });
+    byIdx.set(m.idx, { n, d: dd });
+    const maxIdx = Math.max(...byIdx.keys());
+    const sigs = [];
+    let t = 0, cn = 4, cd = 4;
+    for (let i = 0; i <= maxIdx; i++) {
+      const ch = byIdx.get(i);
+      if (ch && (ch.n !== cn || ch.d !== cd || i === 0)) { cn = ch.n; cd = ch.d; sigs.push({ y: t, n: cn, d: cd }); }
+      else if (ch) { cn = ch.n; cd = ch.d; }
+      t += Math.round(KSH.WHOLE_TICKS * cn / cd);
+    }
+    if (!sigs.length || sigs[0].y > 0) sigs.unshift({ y: 0, n: 4, d: 4 });
+    ED.chart.sigs = sigs;
+    rebuildTiming(); markEdit();
+    toast(`Measure ${m.idx + 1} onward: ${n}/${dd}`);
+  });
+  d.btnInsCmd.addEventListener("click", () => {
+    const tick = Math.max(0, snapTick(ED.timing.msToTick(ED.curMs)));
+    const line = prompt(
+      "Chart command to insert at " + tickLabel(tick) +
+      "\nExamples: zoom_top=100 · zoom_bottom=-50 · zoom_side=30 · tilt=normal · stop=192");
+    if (line === null) return;
+    const s = line.trim();
+    if (!s || /^[0-2]{4}\|/.test(s)) { toast("That is not a command line"); return; }
+    const eq = s.indexOf("=");
+    const key = eq > 0 ? s.slice(0, eq) : "";
+    if (key === "beat") { toast("Use +Sig for time signatures"); return; }
+    if (key === "fx-l" || key === "fx-r" || key.startsWith("laserrange")) { toast("Use the Inspector for that"); return; }
+    pushUndo();
+    if (key === "t") {
+      const v = parseFloat(s.slice(eq + 1));
+      if (isFinite(v) && v > 0) {
+        ED.chart.bpms = ED.chart.bpms.filter(b => b.y !== tick || tick === 0);
+        if (tick === 0) ED.chart.bpms[0].v = v;
+        else { ED.chart.bpms.push({ y: tick, v }); ED.chart.bpms.sort((a, b) => a.y - b.y); }
+        rebuildTiming(); syncInputsFromChart();
+      }
+    } else if (key === "filtertype") {
+      ED.chart.filters = ED.chart.filters.filter(f => f.y !== tick);
+      ED.chart.filters.push({ y: tick, v: s.slice(eq + 1) });
+      ED.chart.filters.sort((a, b) => a.y - b.y);
+    } else {
+      ED.chart.other.push({ y: tick, s });
+      ED.chart.other.sort((a, b) => a.y - b.y);
+    }
+    markEdit();
+  });
 
   // inspector
   d.selFxType.addEventListener("change", applyFxEffect);
   d.inFxParam.addEventListener("change", applyFxEffect);
   d.chkSegWide.addEventListener("change", applyLaserProps);
   d.selFilter.addEventListener("change", applyLaserProps);
+  d.selSpin.addEventListener("change", applySpin);
+  d.inSpinLen.addEventListener("change", applySpin);
   d.btnDelSel.addEventListener("click", deleteSelection);
 
   // files
