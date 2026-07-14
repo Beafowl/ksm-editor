@@ -45,8 +45,9 @@ style 3D preview of the track, modeled on Unnamed SDVX Clone's camera
 shifts, `tilt` rolls (laser-driven, keyword and manual numeric), lane **spins /
 half-spins / swings** animate with USC's exact easing, and `stop` freezes the
 scroll. Scrubbing the timeline through a spin previews it frame by frame. The
-**HiSpeed** slider (or `Ctrl+Scroll` on the game view) controls its scroll speed.
-Split view keeps the 2D editor interactive next to the 3D preview.
+**Lane Speed** number applies to both the editor and the game view
+(`Ctrl+Scroll` on either view adjusts it). Split view keeps the 2D editor
+interactive next to the 3D preview.
 
 ## Navigation & playback
 

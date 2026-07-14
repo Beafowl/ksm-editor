@@ -380,9 +380,7 @@ function updateHover(x, y) {
 function onHighwayWheel(e) {
   e.preventDefault();
   if (e.ctrlKey) {
-    const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    ED.zoom = Math.max(0.4, Math.min(10, ED.zoom * f));
-    ED.dom.inZoom.value = ED.zoom;
+    setLaneSpeed(ED.hispeed * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
   } else {
     seekBySnap(e.deltaY < 0 ? 1 : -1);
   }
@@ -409,6 +407,15 @@ function setViewMode(mode) {
   ED.dom.highwayWrap.className = "view-" + mode;
   document.querySelectorAll(".viewbtn").forEach(b =>
     b.classList.toggle("active", b.dataset.view === mode));
+}
+
+// one lane-speed value drives both views: editor px/tick and game view scroll
+function setLaneSpeed(v) {
+  if (!isFinite(v)) { ED.dom.inLaneSpeed.value = ED.hispeed; return; }
+  v = Math.max(0.1, Math.min(100, v));
+  ED.hispeed = v;
+  ED.zoom = 2 * v;
+  ED.dom.inLaneSpeed.value = Math.round(v * 100) / 100;
 }
 
 /* --------------------------- selection --------------------------- */
@@ -981,8 +988,8 @@ function $(id) { return document.getElementById(id); }
 
 function init() {
   const d = ED.dom;
-  for (const id of ["highway", "gameview", "highwayWrap", "inHispeed", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
-    "inBpm", "inOffset", "inZoom", "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
+  for (const id of ["highway", "gameview", "highwayWrap", "inLaneSpeed", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
+    "inBpm", "inOffset", "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
     "chkMetronome", "chkHitsounds", "chkWaveform", "chkWide", "chkFxPreview",
     "inspNone", "inspNote", "inspNoteInfo", "fxEffectBox", "selFxType", "inFxParam",
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
@@ -1051,13 +1058,11 @@ function init() {
   document.querySelectorAll(".viewbtn").forEach(b => {
     b.addEventListener("click", () => setViewMode(b.dataset.view));
   });
-  d.inHispeed.addEventListener("input", () => { ED.hispeed = parseFloat(d.inHispeed.value); });
+  d.inLaneSpeed.addEventListener("change", () => setLaneSpeed(parseFloat(d.inLaneSpeed.value)));
   d.gameview.addEventListener("wheel", e => {
     e.preventDefault();
-    if (e.ctrlKey) {
-      ED.hispeed = Math.max(0.25, Math.min(3, ED.hispeed + (e.deltaY < 0 ? 0.05 : -0.05)));
-      d.inHispeed.value = ED.hispeed;
-    } else seekBySnap(e.deltaY < 0 ? 1 : -1);
+    if (e.ctrlKey) setLaneSpeed(ED.hispeed * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+    else seekBySnap(e.deltaY < 0 ? 1 : -1);
   }, { passive: false });
 
   // transport & options
@@ -1070,7 +1075,6 @@ function init() {
   d.inVolHit.addEventListener("input", () => { ED.volHit = parseFloat(d.inVolHit.value); applyVolumes(); });
   d.inVolMet.addEventListener("input", () => { ED.volMet = parseFloat(d.inVolMet.value); applyVolumes(); });
   d.selSnap.addEventListener("change", () => { ED.snapDiv = parseInt(d.selSnap.value); });
-  d.inZoom.addEventListener("input", () => { ED.zoom = parseFloat(d.inZoom.value); });
   d.chkMetronome.addEventListener("change", () => { ED.opts.metronome = d.chkMetronome.checked; if (ED.playing) resetSched(); });
   d.chkHitsounds.addEventListener("change", () => { ED.opts.hitsounds = d.chkHitsounds.checked; });
   d.chkWaveform.addEventListener("change", () => { ED.opts.waveform = d.chkWaveform.checked; });
