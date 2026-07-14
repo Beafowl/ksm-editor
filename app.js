@@ -44,6 +44,44 @@ const SPIN_TYPES = [
   ["S<", "Swing ←"], ["S>", "Swing →"],
 ];
 
+/* ------------------------ user preferences ------------------------ */
+
+const PREFS_KEY = "ksm-editor-prefs";
+
+function savePrefs() {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({
+      snapDiv: ED.snapDiv,
+      hispeed: ED.hispeed,
+      viewMode: ED.viewMode,
+      wide: ED.laserWideDefault,
+      rate: AudioEng.rate,
+      volMusic: ED.volMusic, volHit: ED.volHit, volMet: ED.volMet,
+      opts: ED.opts,
+    }));
+  } catch (e) { /* storage unavailable */ }
+}
+
+function loadPrefs() {
+  let p;
+  try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}"); } catch (e) { return; }
+  const vol = v => (isFinite(v) ? Math.max(0, Math.min(1, v)) : null);
+  if (SNAP_DIVS.includes(p.snapDiv)) ED.snapDiv = p.snapDiv;
+  if (isFinite(p.hispeed) && p.hispeed >= 0.1 && p.hispeed <= 100) {
+    ED.hispeed = p.hispeed;
+    ED.zoom = 2 * p.hispeed;
+  }
+  if (["editor", "split", "game"].includes(p.viewMode)) ED.viewMode = p.viewMode;
+  ED.laserWideDefault = !!p.wide;
+  if ([0.25, 0.5, 0.75, 1].includes(p.rate)) AudioEng.rate = p.rate;
+  if (vol(p.volMusic) !== null) ED.volMusic = vol(p.volMusic);
+  if (vol(p.volHit) !== null) ED.volHit = vol(p.volHit);
+  if (vol(p.volMet) !== null) ED.volMet = vol(p.volMet);
+  if (p.opts && typeof p.opts === "object")
+    for (const k of Object.keys(ED.opts))
+      if (typeof p.opts[k] === "boolean") ED.opts[k] = p.opts[k];
+}
+
 /* ------------------------- derived state ------------------------- */
 
 function rebuildTiming() {
@@ -444,6 +482,7 @@ function setViewMode(mode) {
   ED.viewMode = mode;
   ED.dom.highwayWrap.className = "view-" + mode;
   ED.dom.selView.value = mode;
+  savePrefs();
 }
 
 // one lane-speed value drives both views: editor px/tick and game view scroll
@@ -453,6 +492,7 @@ function setLaneSpeed(v) {
   ED.hispeed = v;
   ED.zoom = 2 * v;
   ED.dom.inLaneSpeed.value = Math.round(v * 100) / 100;
+  savePrefs();
 }
 
 /* --------------------------- selection --------------------------- */
@@ -1261,6 +1301,7 @@ function init() {
     "btnMetaSave", "btnMetaCancel"])
     d[id] = $(id);
 
+  loadPrefs();
   setChart(KSH.newChart());
 
   // populate selects
@@ -1275,7 +1316,19 @@ function init() {
     o.value = r; o.textContent = Math.round(r * 100) + "%";
     d.selRate.appendChild(o);
   }
-  d.selRate.value = 1;
+  d.selRate.value = AudioEng.rate;
+
+  // reflect restored preferences in the UI
+  d.inLaneSpeed.value = Math.round(ED.hispeed * 100) / 100;
+  d.inVolMusic.value = ED.volMusic;
+  d.inVolHit.value = ED.volHit;
+  d.inVolMet.value = ED.volMet;
+  d.chkMetronome.checked = ED.opts.metronome;
+  d.chkHitsounds.checked = ED.opts.hitsounds;
+  d.chkWaveform.checked = ED.opts.waveform;
+  d.chkFxPreview.checked = ED.opts.fxPreview;
+  d.chkWide.checked = ED.laserWideDefault;
+  setViewMode(ED.viewMode);
   for (const [v, label] of SPIN_TYPES) {
     const o = document.createElement("option"); o.value = v; o.textContent = label;
     d.selSpin.appendChild(o);
@@ -1329,20 +1382,22 @@ function init() {
   d.selRate.addEventListener("change", () => {
     AudioEng.setRate(parseFloat(d.selRate.value));
     if (ED.playing) { AudioEng.play(ED.curMs = AudioEng.positionMs()); resetSched(); }
+    savePrefs();
   });
-  d.inVolMusic.addEventListener("input", () => { ED.volMusic = parseFloat(d.inVolMusic.value); applyVolumes(); });
-  d.inVolHit.addEventListener("input", () => { ED.volHit = parseFloat(d.inVolHit.value); applyVolumes(); });
-  d.inVolMet.addEventListener("input", () => { ED.volMet = parseFloat(d.inVolMet.value); applyVolumes(); });
-  d.selSnap.addEventListener("change", () => { ED.snapDiv = parseInt(d.selSnap.value); });
-  d.chkMetronome.addEventListener("change", () => { ED.opts.metronome = d.chkMetronome.checked; if (ED.playing) resetSched(); });
-  d.chkHitsounds.addEventListener("change", () => { ED.opts.hitsounds = d.chkHitsounds.checked; });
-  d.chkWaveform.addEventListener("change", () => { ED.opts.waveform = d.chkWaveform.checked; });
+  d.inVolMusic.addEventListener("input", () => { ED.volMusic = parseFloat(d.inVolMusic.value); applyVolumes(); savePrefs(); });
+  d.inVolHit.addEventListener("input", () => { ED.volHit = parseFloat(d.inVolHit.value); applyVolumes(); savePrefs(); });
+  d.inVolMet.addEventListener("input", () => { ED.volMet = parseFloat(d.inVolMet.value); applyVolumes(); savePrefs(); });
+  d.selSnap.addEventListener("change", () => { ED.snapDiv = parseInt(d.selSnap.value); savePrefs(); });
+  d.chkMetronome.addEventListener("change", () => { ED.opts.metronome = d.chkMetronome.checked; if (ED.playing) resetSched(); savePrefs(); });
+  d.chkHitsounds.addEventListener("change", () => { ED.opts.hitsounds = d.chkHitsounds.checked; savePrefs(); });
+  d.chkWaveform.addEventListener("change", () => { ED.opts.waveform = d.chkWaveform.checked; savePrefs(); });
   d.chkFxPreview.addEventListener("change", () => {
     ED.opts.fxPreview = d.chkFxPreview.checked;
     if (!ED.opts.fxPreview) FXDSP.updateLaser(null);
     if (ED.playing) resetSched();
+    savePrefs();
   });
-  d.chkWide.addEventListener("change", () => { ED.laserWideDefault = d.chkWide.checked; });
+  d.chkWide.addEventListener("change", () => { ED.laserWideDefault = d.chkWide.checked; savePrefs(); });
 
   // timing inputs
   d.inBpm.addEventListener("change", () => {

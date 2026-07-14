@@ -67,6 +67,8 @@ interactive next to the 3D preview.
   `laser_slam` for slams, `click-01/02` for the metronome), embedded in `sounds.js`
   (regenerate with `tests/make_sounds.js` if the USC folder moves).
 - Song, hitsound and metronome volumes each have their own slider.
+- Your settings (lane speed, snap, view mode, playback speed, volumes, toggles,
+  wide-laser default) are saved locally and restored the next time the editor opens.
 
 ## Notes
 
