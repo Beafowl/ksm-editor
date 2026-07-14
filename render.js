@@ -208,6 +208,10 @@ function drawHighway() {
           const xl = Math.min(x1, x2) - bandW / 2, xr = Math.max(x1, x2) + bandW / 2;
           ctx.globalAlpha = 0.85;
           ctx.fillRect(xl, y1 - h, xr - xl, h);
+          // direction stubs when nothing connects: entry below, exit above
+          const stub = 9;
+          if (i === 0) ctx.fillRect(x1 - bandW / 2, y1, bandW, stub);
+          if (i + 2 >= pts.length) ctx.fillRect(x2 - bandW / 2, y1 - h - stub, bandW, stub);
           ctx.globalAlpha = 1;
         } else {
           ctx.globalAlpha = 0.5;

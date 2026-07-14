@@ -446,9 +446,23 @@ function draw() {
           const xa = Math.min(lx(p.v), lx(q.v)) - BTN_W/2, xb = Math.max(lx(p.v), lx(q.v)) + BTN_W/2;
           const yTop = Math.min(Math.max(y0 + SLAM_H, y1), Y1), yBot = Math.max(y0, Y0);
           if (yBot > Y1 || yTop < Y0) continue;
-          if (poly(ctx, [P(xa, yBot), P(xb, yBot), P(xb, yTop), P(xa, yTop)])) {
-            ctx.fillStyle = `rgba(${color},0.85)`;
+          ctx.fillStyle = `rgba(${color},0.85)`;
+          if (poly(ctx, [P(xa, yBot), P(xb, yBot), P(xb, yTop), P(xa, yTop)]))
             ctx.fill();
+          // direction stubs when nothing connects: entry below the start
+          // point, exit above the end point
+          const STUB = SLAM_H * 0.8;
+          if (i === 0) {
+            const x = lx(p.v);
+            const b0 = Math.max(y0 - STUB, Y0), b1 = Math.min(y0, Y1);
+            if (b1 > b0 && poly(ctx, [P(x - BTN_W/2, b0), P(x + BTN_W/2, b0), P(x + BTN_W/2, b1), P(x - BTN_W/2, b1)]))
+              ctx.fill();
+          }
+          if (i + 2 >= pts.length) {
+            const x = lx(q.v);
+            const t0 = Math.max(yTop, Y0), t1 = Math.min(yTop + STUB, Y1);
+            if (t1 > t0 && poly(ctx, [P(x - BTN_W/2, t0), P(x + BTN_W/2, t0), P(x + BTN_W/2, t1), P(x - BTN_W/2, t1)]))
+              ctx.fill();
           }
         } else {
           const span = clampSpan(y0, y1);
