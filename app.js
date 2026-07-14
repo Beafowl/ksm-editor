@@ -9,7 +9,7 @@ const ED = {
   zoom: 2, snapDiv: 16,
   viewMode: "editor", hispeed: 1,
   tool: "bt",
-  sel: null, hover: null,
+  sel: null, selList: [], hover: null,
   laserEdit: null, laserWideDefault: false,
   drag: null,
   chartVersion: 0, dirty: false,
@@ -83,7 +83,7 @@ function redo() {
   afterRestore();
 }
 function afterRestore() {
-  ED.sel = null; ED.laserEdit = null; ED.drag = null;
+  ED.sel = null; ED.selList = []; ED.laserEdit = null; ED.drag = null;
   rebuildTiming(); markEdit();
   syncInputsFromChart(); updateInspector();
 }
@@ -257,10 +257,24 @@ function onHighwayDown(e) {
     markEdit();
   } else if (ED.tool === "select") {
     const hit = hitTest(x, y);
-    setSel(hit);
-    if (!hit) return;
+    const add = e.shiftKey;
+    const wasInGroup = hit && ED.selList.some(s => sameSel(s, hit));
+    setSel(hit, add);
+    if (!hit || add) return; // shift-click only toggles membership
     const G = ED.G || Render.geom();
     if (hit.type === "bt" || hit.type === "fx") {
+      if (ED.selList.length > 1) {
+        // drag moves every selected note together (tick delta only)
+        const items = ED.selList
+          .filter(s => s.type === "bt" || s.type === "fx")
+          .map(s => ({ s, origY: s.note.y }));
+        ED.drag = {
+          mode: "moveMulti", items, grabbed: false,
+          grabTick: snapTick(G.tickOfY(y)),
+          collapseTo: wasInGroup ? hit : null,
+        };
+        return;
+      }
       const n = hit.note;
       const isFx = hit.type === "fx";
       const resize = n.l > 0 && Math.abs(G.yOfTick(n.y + n.l) - y) < 8;
@@ -269,7 +283,7 @@ function onHighwayDown(e) {
         note: n, isFx, lane: hit.lane, grabbed: false,
         grabOff: snapTick(G.tickOfY(y)) - n.y,
       };
-    } else if (hit.type === "laserpoint") {
+    } else if (hit.type === "laserpoint" && ED.selList.length === 1) {
       const arr = ED.chart.lasers[hit.side];
       const si = arr.indexOf(hit.seg);
       const bounds = {};
@@ -294,9 +308,15 @@ function onRightClick(x, y) {
   }
   const hit = hitTest(x, y);
   if (!hit) return;
+  // right-click on a member of a multi-selection deletes the whole selection
+  if (ED.selList.length > 1 && ED.selList.some(s => sameSel(s, hit))) {
+    deleteSelection();
+    return;
+  }
   pushUndo();
   deleteObject(hit);
-  markEdit(); setSel(null);
+  pruneSel();
+  markEdit(); updateInspector();
 }
 
 function onHighwayMove(e) {
@@ -328,6 +348,10 @@ function onHighwayMove(e) {
   } else if (d.mode === "resizeNote") {
     if (!d.grabbed) { pushUndo(); d.grabbed = true; }
     d.note.l = Math.max(0, snapTick(G.tickOfY(y)) - d.note.y);
+  } else if (d.mode === "moveMulti") {
+    if (!d.grabbed) { pushUndo(); d.grabbed = true; }
+    const delta = snapTick(G.tickOfY(y)) - d.grabTick;
+    for (const it of d.items) it.s.note.y = Math.max(0, it.origY + delta);
   } else if (d.mode === "movePoint") {
     if (!d.grabbed) { pushUndo(); d.grabbed = true; }
     const pts = d.seg.points;
@@ -353,6 +377,20 @@ function onHighwayUp() {
     const arr = d.isFx ? ED.chart.fx[d.lane] : ED.chart.bt[d.lane];
     cleanupOverlaps(arr, d.note);
     markEdit(); updateInspector();
+  } else if (d.mode === "moveMulti") {
+    if (d.grabbed) {
+      for (const it of d.items) {
+        const arr = it.s.type === "fx" ? ED.chart.fx[it.s.lane] : ED.chart.bt[it.s.lane];
+        cleanupOverlaps(arr, it.s.note);
+      }
+      pruneSel();
+      markEdit(); updateInspector();
+    } else if (d.collapseTo) {
+      // plain click on a group member without dragging: collapse to it
+      ED.selList = [d.collapseTo];
+      ED.sel = d.collapseTo;
+      updateInspector();
+    }
   } else if (d.mode === "movePoint" && d.grabbed) {
     d.seg.points.sort((a, b) => a.y - b.y);
     markEdit(); updateInspector();
@@ -420,12 +458,67 @@ function setLaneSpeed(v) {
 
 /* --------------------------- selection --------------------------- */
 
-function setSel(sel) { ED.sel = sel; updateInspector(); }
+function sameSel(a, b) {
+  if (!a || !b || a.type !== b.type) return false;
+  if (a.type === "bt" || a.type === "fx") return a.note === b.note;
+  if (a.type === "laserseg") return a.seg === b.seg;
+  if (a.type === "laserpoint") return a.seg === b.seg && a.pt === b.pt;
+  return false;
+}
+
+// add=true (shift): toggle membership. add=false: replace selection,
+// except clicking an already-selected object keeps the group (for dragging).
+function setSel(sel, add = false) {
+  if (!sel) {
+    if (!add) { ED.selList = []; ED.sel = null; }
+  } else if (add) {
+    const i = ED.selList.findIndex(s => sameSel(s, sel));
+    if (i >= 0) {
+      ED.selList.splice(i, 1);
+      ED.sel = ED.selList[ED.selList.length - 1] || null;
+    } else {
+      ED.selList.push(sel);
+      ED.sel = sel;
+    }
+  } else {
+    const i = ED.selList.findIndex(s => sameSel(s, sel));
+    if (i >= 0) ED.sel = ED.selList[i];
+    else { ED.selList = [sel]; ED.sel = sel; }
+  }
+  updateInspector();
+}
+
+// drop selection entries whose objects no longer exist in the chart
+function pruneSel() {
+  const c = ED.chart;
+  ED.selList = ED.selList.filter(s => {
+    if (s.type === "bt") return c.bt[s.lane].includes(s.note);
+    if (s.type === "fx") return c.fx[s.lane].includes(s.note);
+    if (s.type === "laserseg") return c.lasers[s.side].includes(s.seg);
+    if (s.type === "laserpoint") return c.lasers[s.side].includes(s.seg) && s.pt < s.seg.points.length;
+    return false;
+  });
+  if (ED.sel && !ED.selList.some(s => sameSel(s, ED.sel)))
+    ED.sel = ED.selList[ED.selList.length - 1] || null;
+}
 
 function deleteSelection() {
-  if (!ED.sel) return;
+  if (!ED.selList.length) return;
   pushUndo();
-  deleteObject(ED.sel);
+  // laser points per segment, highest index first so indices stay valid
+  const bySeg = new Map();
+  for (const s of ED.selList) {
+    if (s.type !== "laserpoint") continue;
+    if (!bySeg.has(s.seg)) bySeg.set(s.seg, { side: s.side, idxs: [] });
+    bySeg.get(s.seg).idxs.push(s.pt);
+  }
+  for (const [seg, info] of bySeg) {
+    info.idxs.sort((a, b) => b - a);
+    for (const i of info.idxs) seg.points.splice(i, 1);
+    if (seg.points.length < 2) removeSeg(info.side, seg);
+  }
+  for (const s of ED.selList)
+    if (s.type !== "laserpoint") deleteObject(s);
   markEdit(); setSel(null);
 }
 
@@ -635,6 +728,65 @@ function updateTimeDisplay() {
 
 /* ---------------- events panel (current measure) ---------------- */
 
+// key -> [badge, explanation] for raw commands; also used by the help modal
+const EVENT_INFO = {
+  t: ["BPM", "Tempo change from this point on."],
+  beat: ["Time sig", "Time signature — sets the measure length from this measure."],
+  filtertype: ["Filter", "Filter sound applied to the song while a laser moves (peak / lpf1 / hpf1 / bitc or a #define_filter name)."],
+  zoom_top: ["Cam pitch", "Camera: pitches the far end of the track up/down. Values interpolate between keyframes."],
+  zoom_bottom: ["Cam zoom", "Camera: zooms toward (+) / away from (−) the track. Values interpolate between keyframes."],
+  zoom_side: ["Cam shift", "Camera: shifts the track sideways. Values interpolate between keyframes."],
+  tilt: ["Tilt", "Track roll. normal / bigger / biggest / zero set how strongly lasers tilt the track, keep_* holds the tilt; a number is manual roll (1 ≈ −10°) that interpolates to the next number."],
+  stop: ["Stop", "Freezes track scrolling for N/192 of a measure while the music keeps playing."],
+  center_split: ["Split", "Splits the track down the middle, pushing the halves apart."],
+  lane_toggle: ["Lane hide", "Fades the track out/in over N/192 of a measure."],
+  "fx-l_se": ["FX sample", "Custom hit sample for left FX chips."],
+  "fx-r_se": ["FX sample", "Custom hit sample for right FX chips."],
+};
+const SPIN_LABEL = { "@(": "Spin ←", "@)": "Spin →", "@<": "Half spin ←", "@>": "Half spin →", "S<": "Swing ←", "S>": "Swing →" };
+
+// apply(v) must validate before mutating and return false when invalid
+const promptEdit = (label, cur, apply) => {
+  const val = prompt(label, cur);
+  if (val === null || val.trim() === "" || val.trim() === cur) return;
+  pushUndo();
+  if (apply(val.trim()) === false) { ED.undoStack.pop(); return; }
+  markEdit();
+};
+
+function insertCommandAtCursor() {
+  const tick = Math.max(0, snapTick(ED.timing.msToTick(ED.curMs)));
+  const line = prompt(
+    "Chart command to insert at " + tickLabel(tick) +
+    "\nExamples: zoom_top=100 · zoom_bottom=-50 · zoom_side=30 · tilt=normal · tilt=1 · stop=192 · t=150\n" +
+    "(See ? → Chart events reference for what each does)");
+  if (line === null) return;
+  const s = line.trim();
+  if (!s || /^[0-2]{4}\|/.test(s)) { toast("That is not a command line"); return; }
+  const eq = s.indexOf("=");
+  const key = eq > 0 ? s.slice(0, eq) : "";
+  if (key === "beat") { toast("Use +Sig for time signatures"); return; }
+  if (key === "fx-l" || key === "fx-r" || key.startsWith("laserrange")) { toast("Use the Inspector for that"); return; }
+  pushUndo();
+  if (key === "t") {
+    const v = parseFloat(s.slice(eq + 1));
+    if (isFinite(v) && v > 0) {
+      ED.chart.bpms = ED.chart.bpms.filter(b => b.y !== tick || tick === 0);
+      if (tick === 0) ED.chart.bpms[0].v = v;
+      else { ED.chart.bpms.push({ y: tick, v }); ED.chart.bpms.sort((a, b) => a.y - b.y); }
+      rebuildTiming(); syncInputsFromChart();
+    }
+  } else if (key === "filtertype") {
+    ED.chart.filters = ED.chart.filters.filter(f => f.y !== tick);
+    ED.chart.filters.push({ y: tick, v: s.slice(eq + 1) });
+    ED.chart.filters.sort((a, b) => a.y - b.y);
+  } else {
+    ED.chart.other.push({ y: tick, s });
+    ED.chart.other.sort((a, b) => a.y - b.y);
+  }
+  markEdit();
+}
+
 let evListKey = "";
 function renderEventList(m) {
   const key = m.idx + "|" + ED.chartVersion;
@@ -645,30 +797,87 @@ function renderEventList(m) {
   const inM = e => e.y >= m.y && e.y < m.y + m.ticks;
   const rows = [];
   for (const b of ED.chart.bpms) if (b.y > 0 && inM(b))
-    rows.push({ y: b.y, txt: "t=" + KSH.fmtNum(b.v), del: () => { ED.chart.bpms = ED.chart.bpms.filter(x => x !== b); rebuildTiming(); syncInputsFromChart(); } });
+    rows.push({
+      y: b.y, tag: "BPM", txt: KSH.fmtNum(b.v), expl: EVENT_INFO.t[1], raw: "t=" + KSH.fmtNum(b.v),
+      del: () => { ED.chart.bpms = ED.chart.bpms.filter(x => x !== b); rebuildTiming(); syncInputsFromChart(); },
+      edit: () => promptEdit("BPM at " + tickLabel(b.y) + ":", KSH.fmtNum(b.v), v => {
+        const n = parseFloat(v);
+        if (!isFinite(n) || n <= 0) { toast("Invalid BPM"); return false; }
+        b.v = n; rebuildTiming(); syncInputsFromChart();
+      }),
+    });
   for (const s of ED.chart.sigs) if (s.y > 0 && inM(s))
-    rows.push({ y: s.y, txt: `beat=${s.n}/${s.d}`, del: () => { ED.chart.sigs = ED.chart.sigs.filter(x => x !== s); rebuildTiming(); } });
+    rows.push({
+      y: s.y, tag: "Time sig", txt: `${s.n}/${s.d}`, expl: EVENT_INFO.beat[1], raw: `beat=${s.n}/${s.d}`,
+      del: () => { ED.chart.sigs = ED.chart.sigs.filter(x => x !== s); rebuildTiming(); },
+      edit: () => promptEdit("Time signature:", `${s.n}/${s.d}`, v => {
+        const mm = /^(\d+)\s*\/\s*(\d+)$/.exec(v);
+        if (!mm || (KSH.WHOLE_TICKS * +mm[1]) % +mm[2] !== 0) { toast("Invalid signature"); return false; }
+        s.n = +mm[1]; s.d = +mm[2]; rebuildTiming();
+      }),
+    });
   for (const f of ED.chart.filters) if (inM(f))
-    rows.push({ y: f.y, txt: "filtertype=" + f.v, del: () => { ED.chart.filters = ED.chart.filters.filter(x => x !== f); } });
-  for (const sp of ED.chart.spins) if (inM(sp))
-    rows.push({ y: sp.y, txt: "spin " + sp.s, del: () => { ED.chart.spins = ED.chart.spins.filter(x => x !== sp); } });
-  for (const o of ED.chart.other) if (inM(o))
-    rows.push({ y: o.y, txt: o.s, del: () => { ED.chart.other = ED.chart.other.filter(x => x !== o); } });
+    rows.push({
+      y: f.y, tag: "Filter", txt: f.v, expl: EVENT_INFO.filtertype[1], raw: "filtertype=" + f.v,
+      del: () => { ED.chart.filters = ED.chart.filters.filter(x => x !== f); },
+      edit: () => promptEdit("Filter type (peak / lpf1 / hpf1 / bitc / custom):", f.v, v => { f.v = v; }),
+    });
+  for (const sp of ED.chart.spins) if (inM(sp)) {
+    const sm = /^(@\(|@\)|@<|@>|S<|S>)\s*(\d*)/.exec(sp.s);
+    const nice = sm ? `${SPIN_LABEL[sm[1]] || sm[1]} · ${sm[2] || "?"}t` : sp.s;
+    rows.push({
+      y: sp.y, tag: "Spin", txt: nice,
+      expl: "Lane spin on a slam. @( @) full spin, @< @> half spin, S< S> swing; the number is the duration in 1/192s of a measure.",
+      raw: sp.s,
+      del: () => { ED.chart.spins = ED.chart.spins.filter(x => x !== sp); },
+      edit: () => promptEdit("Spin (e.g. @(192, @>96, S<48):", sp.s, v => {
+        if (!/^(@\(|@\)|@<|@>|S<|S>)\d+/.test(v)) { toast("Invalid spin — use @( @) @< @> S< S> + length"); return false; }
+        sp.s = v;
+      }),
+    });
+  }
+  for (const o of ED.chart.other) if (inM(o)) {
+    const eq = o.s.indexOf("=");
+    const okey = eq > 0 ? o.s.slice(0, eq) : o.s;
+    const oval = eq > 0 ? o.s.slice(eq + 1) : "";
+    const info = EVENT_INFO[okey];
+    rows.push({
+      y: o.y, tag: info ? info[0] : okey, txt: info ? oval : (oval || o.s),
+      expl: info ? info[1] : "Raw chart command (kept verbatim on save).",
+      raw: o.s,
+      del: () => { ED.chart.other = ED.chart.other.filter(x => x !== o); },
+      edit: () => promptEdit("Command:", o.s, v => {
+        if (/^[0-2]{4}\|/.test(v)) { toast("That is a note row, not a command"); return false; }
+        o.s = v;
+      }),
+    });
+  }
   rows.sort((a, b) => a.y - b.y);
-  if (!rows.length) { el.className = "hint"; el.textContent = "—"; return; }
+  if (!rows.length) {
+    el.className = "hint";
+    el.textContent = "No events in this measure.";
+    return;
+  }
   el.className = "";
   for (const r of rows.slice(0, 24)) {
     const div = document.createElement("div");
     div.className = "evrow";
+    div.title = r.expl + "\n\nRaw: " + r.raw;
+    const tag = document.createElement("span");
+    tag.className = "evtag";
+    tag.textContent = r.tag;
     const span = document.createElement("span");
     span.className = "evtxt";
-    span.textContent = tickLabel(r.y) + "  " + r.txt;
-    span.title = r.txt;
-    const btn = document.createElement("button");
-    btn.textContent = "×";
-    btn.title = "Delete this event";
-    btn.addEventListener("click", () => { pushUndo(); r.del(); markEdit(); });
-    div.appendChild(span); div.appendChild(btn);
+    span.textContent = tickLabel(r.y).replace(/^#\d+\./, "b") + " · " + r.txt;
+    const be = document.createElement("button");
+    be.textContent = "✎";
+    be.title = "Edit this event";
+    be.addEventListener("click", r.edit);
+    const bx = document.createElement("button");
+    bx.textContent = "×";
+    bx.title = "Delete this event";
+    bx.addEventListener("click", () => { pushUndo(); r.del(); markEdit(); });
+    div.append(tag, span, be, bx);
     el.appendChild(div);
   }
   if (rows.length > 24) {
@@ -692,9 +901,35 @@ function tickLabel(y) {
 function updateInspector() {
   const d = ED.dom;
   const sel = ED.sel;
-  d.inspNone.style.display = sel ? "none" : "";
-  d.inspNote.style.display = sel && (sel.type === "bt" || sel.type === "fx") ? "" : "none";
-  d.inspLaser.style.display = sel && (sel.type === "laserseg" || sel.type === "laserpoint") ? "" : "none";
+  const multi = ED.selList.length > 1;
+  d.inspMulti.style.display = multi ? "" : "none";
+  d.inspNone.style.display = sel || multi ? "none" : "";
+  d.inspNote.style.display = !multi && sel && (sel.type === "bt" || sel.type === "fx") ? "" : "none";
+  d.inspLaser.style.display = !multi && sel && (sel.type === "laserseg" || sel.type === "laserpoint") ? "" : "none";
+  if (multi) {
+    const counts = {};
+    for (const s of ED.selList) {
+      const kind = s.type === "bt" ? (s.note.l > 0 ? "BT hold" : "BT chip")
+        : s.type === "fx" ? (s.note.l > 0 ? "FX hold" : "FX chip")
+        : s.type === "laserseg" ? "laser" : "laser point";
+      counts[kind] = (counts[kind] || 0) + 1;
+    }
+    d.inspMultiInfo.textContent = ED.selList.length + " selected: " +
+      Object.entries(counts).map(([k, n]) => `${n} ${k}${n > 1 ? "s" : ""}`).join(", ");
+    // batch effect editing when every selected object is an FX hold
+    const allFxHolds = ED.selList.every(s => s.type === "fx" && s.note.l > 0);
+    d.fxEffectBox.style.display = allFxHolds ? "" : "none";
+    if (allFxHolds && sel) {
+      const [type, param] = (sel.note.fx || "").split(";");
+      setSelectValue(d.selFxType, type || "");
+      const def = FX_TYPES.find(t => t.name === type);
+      const isCustom = !!type && !def;
+      d.inFxParam.style.display = (def && def.param !== null) || isCustom ? "" : "none";
+      d.inFxParam.value = param != null && param !== "" ? param : (def && def.param !== null ? def.param : "");
+    }
+    return;
+  }
+  d.fxEffectBox.style.display = "none";
   if (!sel) return;
 
   if (sel.type === "bt" || sel.type === "fx") {
@@ -757,8 +992,9 @@ function applySpin() {
 }
 
 function applyFxEffect() {
-  const n = ED.selNote();
-  if (!n || ED.sel.type !== "fx" || n.l === 0) return;
+  // applies to every selected FX hold (single selection is a list of one)
+  const targets = ED.selList.filter(s => s.type === "fx" && s.note.l > 0).map(s => s.note);
+  if (!targets.length) return;
   const type = ED.dom.selFxType.value;
   const def = FX_TYPES.find(t => t.name === type);
   const isCustom = !!type && !def;
@@ -770,11 +1006,10 @@ function applyFxEffect() {
     if (def && def.param !== null) str += ";" + (p === "" ? def.param : p);
     else if (isCustom && p !== "") str += ";" + p;
   }
-  if (str !== (n.fx || "")) {
-    pushUndo();
-    n.fx = str;
-    markEdit(); updateInspector();
-  }
+  if (targets.every(n => str === (n.fx || ""))) return;
+  pushUndo();
+  for (const n of targets) n.fx = str;
+  markEdit(); updateInspector();
 }
 
 // rebuild effect/filter dropdowns from built-ins + the chart's #define lines
@@ -839,7 +1074,7 @@ function setChart(chart) {
   if (ED.playing) pausePlayback();
   ED.chart = chart;
   ED.undoStack = []; ED.redoStack = [];
-  ED.sel = null; ED.laserEdit = null; ED.drag = null;
+  ED.sel = null; ED.selList = []; ED.laserEdit = null; ED.drag = null;
   ED.dirty = false; hitDirty = true;
   ED.curMs = 0;
   rebuildTiming();
@@ -991,9 +1226,9 @@ function init() {
   for (const id of ["highway", "gameview", "highwayWrap", "inLaneSpeed", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
     "inBpm", "inOffset", "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
     "chkMetronome", "chkHitsounds", "chkWaveform", "chkWide", "chkFxPreview",
-    "inspNone", "inspNote", "inspNoteInfo", "fxEffectBox", "selFxType", "inFxParam",
+    "inspNone", "inspNote", "inspNoteInfo", "inspMulti", "inspMultiInfo", "fxEffectBox", "selFxType", "inFxParam",
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
-    "spinBox", "selSpin", "inSpinLen", "eventList",
+    "spinBox", "selSpin", "inSpinLen", "eventList", "btnAddEvent",
     "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd",
     "fileKsh", "fileAudio", "metaModal", "helpModal",
     "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
@@ -1143,37 +1378,8 @@ function init() {
     rebuildTiming(); markEdit();
     toast(`Measure ${m.idx + 1} onward: ${n}/${dd}`);
   });
-  d.btnInsCmd.addEventListener("click", () => {
-    const tick = Math.max(0, snapTick(ED.timing.msToTick(ED.curMs)));
-    const line = prompt(
-      "Chart command to insert at " + tickLabel(tick) +
-      "\nExamples: zoom_top=100 · zoom_bottom=-50 · zoom_side=30 · tilt=normal · stop=192");
-    if (line === null) return;
-    const s = line.trim();
-    if (!s || /^[0-2]{4}\|/.test(s)) { toast("That is not a command line"); return; }
-    const eq = s.indexOf("=");
-    const key = eq > 0 ? s.slice(0, eq) : "";
-    if (key === "beat") { toast("Use +Sig for time signatures"); return; }
-    if (key === "fx-l" || key === "fx-r" || key.startsWith("laserrange")) { toast("Use the Inspector for that"); return; }
-    pushUndo();
-    if (key === "t") {
-      const v = parseFloat(s.slice(eq + 1));
-      if (isFinite(v) && v > 0) {
-        ED.chart.bpms = ED.chart.bpms.filter(b => b.y !== tick || tick === 0);
-        if (tick === 0) ED.chart.bpms[0].v = v;
-        else { ED.chart.bpms.push({ y: tick, v }); ED.chart.bpms.sort((a, b) => a.y - b.y); }
-        rebuildTiming(); syncInputsFromChart();
-      }
-    } else if (key === "filtertype") {
-      ED.chart.filters = ED.chart.filters.filter(f => f.y !== tick);
-      ED.chart.filters.push({ y: tick, v: s.slice(eq + 1) });
-      ED.chart.filters.sort((a, b) => a.y - b.y);
-    } else {
-      ED.chart.other.push({ y: tick, s });
-      ED.chart.other.sort((a, b) => a.y - b.y);
-    }
-    markEdit();
-  });
+  d.btnInsCmd.addEventListener("click", insertCommandAtCursor);
+  d.btnAddEvent.addEventListener("click", insertCommandAtCursor);
 
   // inspector
   d.selFxType.addEventListener("change", applyFxEffect);

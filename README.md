@@ -24,7 +24,9 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
   `Enter` / `Esc` / double-click finishes the laser; right-click removes the last point.
   “New lasers 2× wide” places `laserrange=2x` lasers.
 - **Right-click** deletes whatever is under the cursor. **Select** tool drags notes,
-  resizes holds (grab the tail), and moves laser points.
+  resizes holds (grab the tail), and moves laser points. **Shift+click** builds a
+  multi-selection: drag moves everything together, `Del` deletes all, and choosing
+  an effect applies it to every selected FX hold.
 - **Effects**: select an **FX hold** → choose effect + parameter in the Inspector
   (`Retrigger;8`, `Gate;16`, `Flanger`, `BitCrusher;10`, …). Custom `#define_fx` /
   `#define_filter` effects from the chart appear in the dropdowns too. Select a
@@ -32,9 +34,10 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
 - **Spins**: select a **laser point** → add a lane spin / half-spin / swing with a
   length (put them on slams).
 - **Timing & camera**: **+BPM** and **+Sig** insert tempo / time-signature changes at
-  the cursor; **+Cmd** inserts raw commands (`zoom_top`, `zoom_bottom`, `zoom_side`,
-  `tilt`, `stop`, …). The **Events** panel lists everything in the current measure
-  with one-click delete.
+  the cursor; **+Cmd** / “+ Add event” insert commands (`zoom_top`, `zoom_bottom`,
+  `zoom_side`, `tilt`, `stop`, …). The **Events** panel lists everything in the
+  current measure with readable labels, tooltips explaining each command, and ✎ / ×
+  to edit or delete. A full **Chart events reference** lives in the ? help dialog.
 - `Ctrl+Z` / `Ctrl+Y` undo/redo · `Del` delete selection · `Ctrl+S` save.
 
 ## Game view

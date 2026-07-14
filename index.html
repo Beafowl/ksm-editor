@@ -62,12 +62,16 @@
       <div id="inspNone" class="hint">Nothing selected.<br>
         <b>Select</b> tool: click a note / laser.<br>
         Right-click deletes. Drag hold tail to resize.</div>
+      <div id="inspMulti" style="display:none">
+        <div id="inspMultiInfo" class="info"></div>
+        <div class="hint">Shift+click toggles · drag moves all · <kbd>Del</kbd> deletes all</div>
+      </div>
       <div id="inspNote" style="display:none">
         <div id="inspNoteInfo" class="info"></div>
-        <div id="fxEffectBox">
-          <label class="row"><span>Effect</span><select id="selFxType"></select></label>
-          <label class="row"><span>Param</span><input id="inFxParam" type="number" step="1" style="width:64px"></label>
-        </div>
+      </div>
+      <div id="fxEffectBox" style="display:none">
+        <label class="row"><span>Effect</span><select id="selFxType"></select></label>
+        <label class="row"><span>Param</span><input id="inFxParam" type="number" step="1" style="width:64px"></label>
       </div>
       <div id="inspLaser" style="display:none">
         <div id="inspLaserInfo" class="info"></div>
@@ -86,14 +90,16 @@
     <section>
       <h3>Events (this measure)</h3>
       <div id="eventList" class="hint">—</div>
+      <button id="btnAddEvent" title="Insert a chart command at the cursor position">+ Add event at cursor</button>
+      <div class="hint">Hover an event for what it does — full reference under <b>?</b>. ✎ edits, × deletes.</div>
     </section>
 
     <section>
       <h3>Playback</h3>
       <label class="row"><span>Speed</span><select id="selRate"></select></label>
-      <label class="row"><span>Song</span><input id="inVolMusic" type="range" min="0" max="1" step="0.05" value="0.8"></label>
-      <label class="row"><span>Hitsounds</span><input id="inVolHit" type="range" min="0" max="1" step="0.05" value="0.7"></label>
-      <label class="row"><span>Metronome</span><input id="inVolMet" type="range" min="0" max="1" step="0.05" value="0.7"></label>
+      <label class="col"><span>Song</span><input id="inVolMusic" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+      <label class="col"><span>Hitsounds</span><input id="inVolHit" type="range" min="0" max="1" step="0.05" value="0.7"></label>
+      <label class="col"><span>Metronome</span><input id="inVolMet" type="range" min="0" max="1" step="0.05" value="0.7"></label>
       <label class="chk"><input type="checkbox" id="chkHitsounds" checked> Hitsounds</label>
       <label class="chk"><input type="checkbox" id="chkMetronome"> Metronome</label>
       <label class="chk"><input type="checkbox" id="chkWaveform" checked> Waveform</label>
@@ -146,7 +152,7 @@
         <li><b>BT / FX tool:</b> click a lane = chip · click-drag upward = hold · click an existing chip = remove it.</li>
         <li><b>Laser tools:</b> each click adds a point. Click on the <i>same row</i> = slam. <kbd>Enter</kbd>/<kbd>Esc</kbd>/double-click finishes the laser, right-click removes the last point.</li>
         <li><b>Right-click</b> (any tool) deletes what's under the cursor.</li>
-        <li><b>Select tool:</b> drag notes to move, drag a hold's tail to resize, drag laser points freely.</li>
+        <li><b>Select tool:</b> drag notes to move, drag a hold's tail to resize, drag laser points freely. <b>Shift+click</b> selects multiple objects — drag moves them together, <kbd>Del</kbd> deletes all, and picking an effect applies to every selected FX hold.</li>
       </ul>
       <h4>Effects &amp; events</h4>
       <ul>
@@ -188,6 +194,25 @@
       </ul>
     </div>
   </div>
+  <h4>Chart events reference</h4>
+  <p class="hint" style="margin-bottom:6px">Everything the Events panel can show. Insert with <b>+Cmd</b> / “+ Add event”; camera values interpolate linearly between two keyframes of the same command.</p>
+  <table class="evref">
+    <tr><td><code>t=185</code></td><td>BPM (tempo) change.</td></tr>
+    <tr><td><code>beat=7/8</code></td><td>Time signature — sets the measure length (use <b>+Sig</b>).</td></tr>
+    <tr><td><code>filtertype=peak</code></td><td>Filter sound while a laser moves: <code>peak</code> (wah), <code>lpf1</code> (low-pass), <code>hpf1</code> (high-pass), <code>bitc</code> (bitcrush) or a <code>#define_filter</code> name. Set per-laser via the Inspector.</td></tr>
+    <tr><td><code>zoom_top=50</code></td><td>Camera pitch — tips the far end of the track down (+) or up (−).</td></tr>
+    <tr><td><code>zoom_bottom=-75</code></td><td>Camera zoom — pulls the camera away (−) or pushes it in (+).</td></tr>
+    <tr><td><code>zoom_side=30</code></td><td>Camera shift — slides the track sideways.</td></tr>
+    <tr><td><code>tilt=bigger</code></td><td>Laser tilt strength: <code>normal</code> / <code>bigger</code> / <code>biggest</code> / <code>zero</code>; <code>keep_*</code> holds the current tilt.</td></tr>
+    <tr><td><code>tilt=1</code></td><td>Manual roll: 1 ≈ −10°, interpolates to the next numeric tilt.</td></tr>
+    <tr><td><code>stop=192</code></td><td>Freezes scrolling for N/192 of a measure (192 = one 4/4 measure) while the music continues.</td></tr>
+    <tr><td><code>@(192</code> …</td><td>Lane spin on a slam (set on a laser point in the Inspector): <code>@(</code>/<code>@)</code> full spin, <code>@&lt;</code>/<code>@&gt;</code> half spin, <code>S&lt;</code>/<code>S&gt;</code> swing; number = duration in 1/192s of a measure.</td></tr>
+    <tr><td><code>laserrange_l=2x</code></td><td>Wide (2×) laser — Inspector toggle on a selected laser.</td></tr>
+    <tr><td><code>fx-l=Retrigger;8</code></td><td>Effect on an FX hold — set via the Inspector.</td></tr>
+    <tr><td><code>fx-l_se=clap.wav</code></td><td>Custom hit sample for FX chips on that side.</td></tr>
+    <tr><td><code>center_split=100</code></td><td>Splits the track down the middle, pushing the halves apart.</td></tr>
+    <tr><td><code>lane_toggle=48</code></td><td>Fades the track out/in over N/192 of a measure.</td></tr>
+  </table>
   <form method="dialog" class="btnrow"><button class="primary">Close</button></form>
 </dialog>
 

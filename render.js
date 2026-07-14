@@ -312,33 +312,32 @@ function drawDiamond(ctx, x, y, r, fill, stroke) {
 }
 
 function drawSelection(ctx, G) {
-  const sel = ED.sel;
-  if (!sel) return;
+  if (!ED.selList.length) return;
   const { trackX, laneW, yOfTick } = G;
-  ctx.strokeStyle = COL.sel; ctx.lineWidth = 2;
-  if (sel.type === "bt" || sel.type === "fx") {
-    const n = ED.selNote();
-    if (!n) return;
-    const wide = sel.type === "fx";
-    const x = wide ? trackX + sel.lane * 2 * laneW : trackX + sel.lane * laneW;
-    const w = wide ? 2 * laneW : laneW;
-    if (n.l > 0) ctx.strokeRect(x, yOfTick(n.y + n.l) - 1, w, yOfTick(n.y) - yOfTick(n.y + n.l) + 2);
-    else ctx.strokeRect(x, yOfTick(n.y) - 6, w, 12);
-  } else if (sel.type === "laserseg" || sel.type === "laserpoint") {
-    const seg = ED.selSeg();
-    if (!seg) return;
-    const X = v => G.laserX(v, seg.wide);
-    ctx.strokeStyle = COL.sel; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    for (let i = 0; i < seg.points.length; i++) {
-      const p = seg.points[i];
-      if (i === 0) ctx.moveTo(X(p.v), yOfTick(p.y)); else ctx.lineTo(X(p.v), yOfTick(p.y));
-    }
-    ctx.stroke();
-    for (let i = 0; i < seg.points.length; i++) {
-      const p = seg.points[i];
-      const active = sel.type === "laserpoint" && i === sel.pt;
-      drawDiamond(ctx, X(p.v), yOfTick(p.y), active ? 7 : 5, active ? COL.sel : "#fff", COL.sel);
+  for (const sel of ED.selList) {
+    ctx.strokeStyle = COL.sel; ctx.lineWidth = 2;
+    if (sel.type === "bt" || sel.type === "fx") {
+      const n = sel.note;
+      const wide = sel.type === "fx";
+      const x = wide ? trackX + sel.lane * 2 * laneW : trackX + sel.lane * laneW;
+      const w = wide ? 2 * laneW : laneW;
+      if (n.l > 0) ctx.strokeRect(x, yOfTick(n.y + n.l) - 1, w, yOfTick(n.y) - yOfTick(n.y + n.l) + 2);
+      else ctx.strokeRect(x, yOfTick(n.y) - 6, w, 12);
+    } else if (sel.type === "laserseg" || sel.type === "laserpoint") {
+      const seg = sel.seg;
+      const X = v => G.laserX(v, seg.wide);
+      ctx.strokeStyle = COL.sel; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let i = 0; i < seg.points.length; i++) {
+        const p = seg.points[i];
+        if (i === 0) ctx.moveTo(X(p.v), yOfTick(p.y)); else ctx.lineTo(X(p.v), yOfTick(p.y));
+      }
+      ctx.stroke();
+      for (let i = 0; i < seg.points.length; i++) {
+        const p = seg.points[i];
+        const active = sel.type === "laserpoint" && i === sel.pt;
+        drawDiamond(ctx, X(p.v), yOfTick(p.y), active ? 7 : 5, active ? COL.sel : "#fff", COL.sel);
+      }
     }
   }
 }

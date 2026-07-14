@@ -119,6 +119,9 @@ kbd {
 .toolbtn.laserr { border-left: 3px solid #ff4aa8; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--dim); }
 .row select, .row input[type="range"] { flex: 1; min-width: 0; }
+.col { display: flex; flex-direction: column; gap: 3px; color: var(--dim); }
+.col span { font-size: 12px; }
+.col input[type="range"] { width: 100%; min-width: 0; }
 .chk { display: flex; align-items: center; gap: 6px; color: var(--dim); cursor: pointer; }
 .hint { color: var(--dim); font-size: 12px; }
 .info { color: #fff; font-size: 12px; background: var(--panel2); border-radius: 4px; padding: 6px; }
@@ -133,8 +136,18 @@ kbd {
   margin-bottom: 4px;
   font-size: 11px;
 }
-.evrow .evtxt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.evrow button { padding: 0 6px; font-size: 11px; border-color: #71303f; color: #ff9daf; flex: none; }
+.evrow .evtxt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.evrow button { padding: 0 6px; font-size: 11px; flex: none; }
+.evrow button:last-child { border-color: #71303f; color: #ff9daf; }
+.evtag {
+  background: #232338;
+  border-radius: 3px;
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--accent2);
+  flex: none;
+  white-space: nowrap;
+}
 
 /* ---------- bottom bar ---------- */
 #bottombar {
@@ -207,3 +220,7 @@ dialog form label, #metaModal label {
 .help2col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; font-size: 12px; }
 .help2col ul, .help2col ol { padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
 @media (max-width: 700px) { .help2col { grid-template-columns: 1fr; } }
+.evref { border-collapse: collapse; font-size: 12px; width: 100%; }
+.evref td { border-top: 1px solid var(--border); padding: 4px 10px 4px 0; vertical-align: top; }
+.evref td:first-child { white-space: nowrap; color: var(--accent2); }
+.evref code { background: #10101c; border-radius: 3px; padding: 0 4px; }
