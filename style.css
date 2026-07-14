@@ -237,6 +237,21 @@ kbd {
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* ---------- tap dialog ---------- */
+#btnTapPad {
+  width: 100%;
+  padding: 28px 0;
+  font-size: 22px;
+  letter-spacing: 4px;
+  border-radius: 10px;
+  margin: 12px 0;
+  background: #20203a;
+  border-color: #44446a;
+}
+#btnTapPad:active { background: var(--accent2); border-color: var(--accent2); color: #04141c; }
+.tap-stats { display: flex; gap: 22px; justify-content: center; color: var(--dim); margin-bottom: 4px; }
+.tap-stats b { color: #fff; font-variant-numeric: tabular-nums; margin-left: 4px; }
+
 /* ---------- dialogs ---------- */
 dialog {
   background: var(--panel);

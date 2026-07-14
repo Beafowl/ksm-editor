@@ -37,6 +37,9 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
   **laser** → toggle 2× wide and set the filter (`peak` / `lpf1` / `hpf1` / `bitc`).
 - **Spins**: select a **laser point** → add a lane spin / half-spin / swing with a
   length (put them on slams).
+- **Tap timing** (`T` or the Tap button, osu!-style): play the song and tap to the
+  beat — BPM is fitted from your taps (works at slow playback speeds too) and the
+  offset from their beat phase; apply either with one click.
 - **Timing & camera**: **+BPM** and **+Sig** insert tempo / time-signature changes at
   the cursor; **+Cmd** / “+ Add event” insert commands (`zoom_top`, `zoom_bottom`,
   `zoom_side`, `tilt`, `stop`, …). The **Events** panel lists everything in the

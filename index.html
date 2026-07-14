@@ -47,6 +47,7 @@
   <div class="group right">
     <label>BPM <input id="inBpm" type="number" step="0.001" min="1" style="width:70px"></label>
     <button id="btnInsBpm" title="Insert a BPM change at the current position">+BPM</button>
+    <button id="btnTap" title="Tap BPM &amp; offset (T)">Tap</button>
     <button id="btnInsSig" title="Change the time signature from the current measure">+Sig</button>
     <button id="btnInsCmd" title="Insert a raw chart command at the cursor (zoom_top, tilt, stop, …)">+Cmd</button>
     <label>Offset <input id="inOffset" type="number" step="1" style="width:64px"> ms</label>
@@ -163,6 +164,25 @@
   </form>
 </dialog>
 
+<dialog id="tapModal">
+  <h3>Tap BPM &amp; offset</h3>
+  <p class="hint">Play the song (<kbd>Space</kbd>) and tap <kbd>T</kbd> — or the pad — on every beat.<br>
+  8+ taps give a solid estimate; pausing more than 2&nbsp;s starts a fresh run.<br>
+  Tapping works at slow playback speeds too. Turn on the metronome afterwards to verify.</p>
+  <button id="btnTapPad">TAP</button>
+  <div class="tap-stats">
+    <span>Taps <b id="tapCount">0</b></span>
+    <span>BPM <b id="tapBpm">—</b></span>
+    <span>Offset <b id="tapOffset">—</b></span>
+  </div>
+  <div class="btnrow">
+    <button id="btnTapReset">Reset</button>
+    <button id="btnTapApplyBpm">Apply BPM</button>
+    <button id="btnTapApplyBoth" class="primary">Apply BPM + offset</button>
+    <button id="btnTapClose">Close</button>
+  </div>
+</dialog>
+
 <dialog id="helpModal">
   <h3>KSM Chart Editor — Help</h3>
   <div class="help2col">
@@ -171,6 +191,7 @@
       <ol>
         <li><b>📂 Folder</b> opens a song folder (chart + audio auto-load, saving writes back). Or <b>Open .ksh</b> + <b>🎵 Audio</b> separately, or drag &amp; drop files.</li>
         <li>For a new song: <b>🎵 Audio</b>, then <b>New</b>, set <b>BPM</b> and <b>Offset</b> (ms position in the audio where beat 1 lands), then chart away.</li>
+        <li><b>Tap timing</b> (<kbd>T</kbd> or the Tap button): play the song and tap <kbd>T</kbd> to the beat — BPM and offset are estimated and applied with one click.</li>
         <li><b>💾 Save</b> writes the .ksh (or downloads it if no folder is open).</li>
       </ol>
       <h4>Placing objects</h4>

@@ -1279,6 +1279,87 @@ function newChart() {
   openMetaModal(true);
 }
 
+/* --------------------------- BPM tapping --------------------------- */
+
+const tap = { wall: [], audio: [], lastWall: 0 };
+
+function tapReset() { tap.wall = []; tap.audio = []; tap.lastWall = 0; updateTapUI(); }
+
+function tapNow() {
+  const wall = performance.now();
+  if (wall - tap.lastWall > 2000) { tap.wall = []; tap.audio = []; } // long pause = fresh run
+  tap.lastWall = wall;
+  tap.wall.push(wall);
+  tap.audio.push(ED.playing ? AudioEng.positionMs() : null);
+  updateTapUI();
+}
+
+// song-time taps when the song was playing (accurate at any playback speed)
+function tapSeries() {
+  return tap.audio.length && tap.audio.every(t => t !== null) ? tap.audio : tap.wall;
+}
+
+function tapBpmEstimate() {
+  const t = tapSeries();
+  if (t.length < 4) return null;
+  // least-squares slope of tap time over tap index = beat period
+  const n = t.length;
+  let sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (let i = 0; i < n; i++) { sx += i; sy += t[i]; sxx += i * i; sxy += i * t[i]; }
+  const period = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+  if (!(period > 100 && period < 3000)) return null; // 20..600 BPM sanity
+  return 60000 / period;
+}
+
+// prefer whole numbers when the raw estimate is close to one
+function tapDisplayBpm(raw) {
+  if (raw === null) return null;
+  const r = Math.round(raw);
+  return Math.abs(raw - r) < 0.3 ? r : Math.round(raw * 100) / 100;
+}
+
+// beat phase of the taps (circular mean), applied as the smallest
+// correction to the current offset so measure alignment is kept
+function tapOffsetEstimate(bpm) {
+  const ts = tap.audio.filter(t => t !== null);
+  if (!bpm || ts.length < 4) return null;
+  const P = 60000 / bpm;
+  let sx = 0, sy = 0;
+  for (const t of ts) {
+    const a = (((t % P) + P) % P) / P * 2 * Math.PI;
+    sx += Math.cos(a); sy += Math.sin(a);
+  }
+  const phase = Math.atan2(sy, sx) / (2 * Math.PI) * P;
+  const cur = parseFloat(ED.chart.meta.o) || 0;
+  let delta = (phase - cur) % P;
+  if (delta > P / 2) delta -= P;
+  if (delta < -P / 2) delta += P;
+  return Math.round(cur + delta);
+}
+
+function updateTapUI() {
+  const d = ED.dom;
+  const raw = tapBpmEstimate();
+  const bpm = tapDisplayBpm(raw);
+  d.tapCount.textContent = tapSeries().length;
+  d.tapBpm.textContent = bpm === null ? "—"
+    : bpm + (Math.abs(raw - bpm) > 0.005 ? ` (raw ${raw.toFixed(2)})` : "");
+  const off = tapOffsetEstimate(bpm);
+  d.tapOffset.textContent = off !== null ? off + " ms" : (bpm !== null && !ED.playing ? "tap while playing" : "—");
+}
+
+function applyTap(withOffset) {
+  const bpm = tapDisplayBpm(tapBpmEstimate());
+  if (bpm === null) { toast("Tap at least 4 beats first"); return; }
+  const off = withOffset ? tapOffsetEstimate(bpm) : null;
+  if (withOffset && off === null) { toast("Offset needs taps while the song plays"); return; }
+  pushUndo();
+  ED.chart.bpms[0].v = bpm;
+  if (off !== null) ED.chart.meta.o = String(off);
+  rebuildTiming(); markEdit(); syncInputsFromChart();
+  toast(`Applied ♩=${bpm}${off !== null ? ` · offset ${off} ms` : ""}`);
+}
+
 /* ------------------------- launch screen ------------------------- */
 
 let launchNewPending = false;
@@ -1346,6 +1427,8 @@ function init() {
     "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd", "selView",
     "fileKsh", "fileAudio", "metaModal", "metaTitle", "helpModal",
     "launchScreen", "btnLaunchFolder", "btnLaunchNew",
+    "btnTap", "tapModal", "btnTapPad", "tapCount", "tapBpm", "tapOffset",
+    "btnTapReset", "btnTapApplyBpm", "btnTapApplyBoth", "btnTapClose",
     "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
     "btnMetaSave", "btnMetaCancel"])
     d[id] = $(id);
@@ -1554,6 +1637,20 @@ function init() {
   d.btnSave.addEventListener("click", saveChart);
   d.selDiff.addEventListener("change", () => loadKshEntry(ED.kshFiles[parseInt(d.selDiff.value)]));
   d.btnMeta.addEventListener("click", () => openMetaModal(false));
+
+  // tap BPM/offset dialog
+  const openTapModal = () => { tapReset(); d.tapModal.showModal(); };
+  d.btnTap.addEventListener("click", openTapModal);
+  d.btnTapPad.addEventListener("click", tapNow);
+  d.btnTapReset.addEventListener("click", tapReset);
+  d.btnTapApplyBpm.addEventListener("click", () => applyTap(false));
+  d.btnTapApplyBoth.addEventListener("click", () => applyTap(true));
+  d.btnTapClose.addEventListener("click", () => d.tapModal.close());
+  d.tapModal.addEventListener("keydown", e => {
+    if (e.key === " ") { e.preventDefault(); togglePlay(); }
+    else if (e.key.toLowerCase() === "t") { e.preventDefault(); tapNow(); }
+    else if (e.key === "Escape") { /* default close */ }
+  });
   d.btnHelp.addEventListener("click", () => d.helpModal.showModal());
   d.btnMetaSave.addEventListener("click", e => { e.preventDefault(); saveMetaModal(); });
   d.btnMetaCancel.addEventListener("click", e => { e.preventDefault(); d.metaModal.close(); });
@@ -1614,6 +1711,11 @@ function onKeyDown(e) {
     case "3": setTool("fx"); break;
     case "4": setTool("laserL"); break;
     case "5": setTool("laserR"); break;
+    case "t": case "T":
+      e.preventDefault();
+      tapReset();
+      ED.dom.tapModal.showModal();
+      break;
     case "Tab": {
       e.preventDefault();
       const modes = ["editor", "split", "game"];
