@@ -81,8 +81,15 @@ kbd {
 
 /* ---------- main ---------- */
 #main { display: flex; flex: 1; min-height: 0; }
-#highwayWrap { flex: 1; position: relative; min-width: 0; }
-#highway { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+#highwayWrap { flex: 1; min-width: 0; display: flex; }
+#highway, #gameview { flex: 1 1 50%; min-width: 0; height: 100%; display: block; }
+#highway { cursor: crosshair; }
+#gameview { border-left: 1px solid var(--border); }
+#highwayWrap.view-editor #gameview { display: none; }
+#highwayWrap.view-editor #highway { flex-basis: 100%; }
+#highwayWrap.view-game #highway { display: none; }
+#highwayWrap.view-game #gameview { flex-basis: 100%; border-left: none; }
+.viewbtn.active { background: var(--accent2); border-color: var(--accent2); color: #04141c; font-weight: 600; }
 
 #sidebar {
   width: 232px;

@@ -19,6 +19,11 @@
     <input type="file" id="fileAudio" accept="audio/*,.ogg,.mp3,.wav,.flac,.m4a" hidden>
   </div>
   <select id="selDiff" style="display:none" title="Switch difficulty"></select>
+  <div class="group" id="viewBtns" title="View mode (Tab)">
+    <button class="viewbtn active" data-view="editor">Editor</button>
+    <button class="viewbtn" data-view="split">Split</button>
+    <button class="viewbtn" data-view="game">Game</button>
+  </div>
   <div id="songTitle">No chart loaded</div>
   <div class="group right">
     <label>BPM <input id="inBpm" type="number" step="0.001" min="1" style="width:70px"></label>
@@ -32,7 +37,10 @@
 </header>
 
 <main id="main">
-  <div id="highwayWrap"><canvas id="highway"></canvas></div>
+  <div id="highwayWrap" class="view-editor">
+    <canvas id="highway"></canvas>
+    <canvas id="gameview"></canvas>
+  </div>
 
   <aside id="sidebar">
     <section>
@@ -83,6 +91,7 @@
     <section>
       <h3>Playback</h3>
       <label class="row"><span>Speed</span><select id="selRate"></select></label>
+      <label class="row" title="Game view scroll speed"><span>HiSpeed</span><input id="inHispeed" type="range" min="0.25" max="3" step="0.05" value="1"></label>
       <label class="row"><span>Song</span><input id="inVolMusic" type="range" min="0" max="1" step="0.05" value="0.8"></label>
       <label class="row"><span>Hitsounds</span><input id="inVolHit" type="range" min="0" max="1" step="0.05" value="0.7"></label>
       <label class="row"><span>Metronome</span><input id="inVolMet" type="range" min="0" max="1" step="0.05" value="0.7"></label>
@@ -158,6 +167,12 @@
         <li><kbd>Home</kbd>/<kbd>End</kbd> start / last note</li>
         <li>Click / drag the bottom timeline to jump anywhere</li>
       </ul>
+      <h4>Game view</h4>
+      <ul>
+        <li><kbd>Tab</kbd> (or the top-bar buttons) switches Editor / Split / Game view.</li>
+        <li>The game view renders the track in 3D with USC's camera: zoom_top/bottom/side, tilt (laser + manual), spins, swings and stops all animate. Scrub through a spin to preview it.</li>
+        <li><b>HiSpeed</b> slider sets its scroll speed; <kbd>Ctrl+Scroll</kbd> on the game view adjusts it too.</li>
+      </ul>
       <h4>Tools</h4>
       <ul>
         <li><kbd>1</kbd> Select · <kbd>2</kbd> BT · <kbd>3</kbd> FX · <kbd>4</kbd> Laser L · <kbd>5</kbd> Laser R</li>
@@ -181,6 +196,7 @@
 <script src="audio.js"></script>
 <script src="fxdsp.js"></script>
 <script src="render.js"></script>
+<script src="gameview.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

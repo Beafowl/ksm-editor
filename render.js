@@ -432,7 +432,7 @@ function drawTimeline() {
 
 function draw() {
   sizeCanvases();
-  drawHighway();
+  if (ED.dom.highway.clientWidth > 0) drawHighway();
   drawTimeline();
 }
 

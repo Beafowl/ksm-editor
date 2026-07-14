@@ -37,6 +37,17 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
   with one-click delete.
 - `Ctrl+Z` / `Ctrl+Y` undo/redo · `Del` delete selection · `Ctrl+S` save.
 
+## Game view
+
+**Tab** (or the Editor / Split / Game buttons in the top bar) switches to an in-game
+style 3D preview of the track, modeled on Unnamed SDVX Clone's camera
+(`Main/src/Camera.cpp`): `zoom_top` pitches, `zoom_bottom` zooms, `zoom_side`
+shifts, `tilt` rolls (laser-driven, keyword and manual numeric), lane **spins /
+half-spins / swings** animate with USC's exact easing, and `stop` freezes the
+scroll. Scrubbing the timeline through a spin previews it frame by frame. The
+**HiSpeed** slider (or `Ctrl+Scroll` on the game view) controls its scroll speed.
+Split view keeps the 2D editor interactive next to the 3D preview.
+
 ## Navigation & playback
 
 - `Space` play/pause · scroll wheel steps by the snap division (`Ctrl+wheel` changes
@@ -54,5 +65,6 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
 - Charts round-trip safely: unrecognized commands in existing charts are preserved
   verbatim on save (verified against the bundled Show and INTERNET YAMERO charts).
 - Files: `ksh.js` (format + timing), `audio.js` (Web Audio engine), `fxdsp.js`
-  (FX/laser audio preview), `render.js` (highway + timeline), `app.js`
-  (editor logic/UI), `index.html`/`style.css` (shell).
+  (FX/laser audio preview), `render.js` (highway + timeline), `gameview.js`
+  (3D game-style preview), `app.js` (editor logic/UI), `index.html`/`style.css`
+  (shell).

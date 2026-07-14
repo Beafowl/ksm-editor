@@ -7,6 +7,7 @@ const ED = {
   chart: null, timing: null, measures: [],
   curMs: 0, playing: false,
   zoom: 2, snapDiv: 16,
+  viewMode: "editor", hispeed: 1,
   tool: "bt",
   sel: null, hover: null,
   laserEdit: null, laserWideDefault: false,
@@ -400,6 +401,14 @@ function seekToMs(ms) {
   ms = Math.max(ED.domainStartMs(), Math.min(ED.domainEndMs(), ms));
   ED.curMs = ms;
   if (ED.playing) { AudioEng.play(ms); resetSched(); }
+  GameView.resetSim();
+}
+
+function setViewMode(mode) {
+  ED.viewMode = mode;
+  ED.dom.highwayWrap.className = "view-" + mode;
+  document.querySelectorAll(".viewbtn").forEach(b =>
+    b.classList.toggle("active", b.dataset.view === mode));
 }
 
 /* --------------------------- selection --------------------------- */
@@ -594,6 +603,7 @@ function frame() {
     }
   }
   Render.draw();
+  if (ED.viewMode !== "editor") GameView.draw();
   updateTimeDisplay();
   requestAnimationFrame(frame);
 }
@@ -828,6 +838,7 @@ function setChart(chart) {
   rebuildTiming();
   ED.chartVersion++;
   rebuildEffectOptions();
+  GameView.resetSim();
   syncInputsFromChart(); updateTitle(); updateInspector();
 }
 
@@ -970,7 +981,7 @@ function $(id) { return document.getElementById(id); }
 
 function init() {
   const d = ED.dom;
-  for (const id of ["highway", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
+  for (const id of ["highway", "gameview", "highwayWrap", "inHispeed", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
     "inBpm", "inOffset", "inZoom", "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
     "chkMetronome", "chkHitsounds", "chkWaveform", "chkWide", "chkFxPreview",
     "inspNone", "inspNote", "inspNoteInfo", "fxEffectBox", "selFxType", "inFxParam",
@@ -1035,6 +1046,19 @@ function init() {
   document.querySelectorAll(".toolbtn").forEach(b => {
     b.addEventListener("click", () => setTool(b.dataset.tool));
   });
+
+  // view modes + game view input
+  document.querySelectorAll(".viewbtn").forEach(b => {
+    b.addEventListener("click", () => setViewMode(b.dataset.view));
+  });
+  d.inHispeed.addEventListener("input", () => { ED.hispeed = parseFloat(d.inHispeed.value); });
+  d.gameview.addEventListener("wheel", e => {
+    e.preventDefault();
+    if (e.ctrlKey) {
+      ED.hispeed = Math.max(0.25, Math.min(3, ED.hispeed + (e.deltaY < 0 ? 0.05 : -0.05)));
+      d.inHispeed.value = ED.hispeed;
+    } else seekBySnap(e.deltaY < 0 ? 1 : -1);
+  }, { passive: false });
 
   // transport & options
   d.btnPlay.addEventListener("click", togglePlay);
@@ -1226,6 +1250,12 @@ function onKeyDown(e) {
     case "3": setTool("fx"); break;
     case "4": setTool("laserL"); break;
     case "5": setTool("laserR"); break;
+    case "Tab": {
+      e.preventDefault();
+      const modes = ["editor", "split", "game"];
+      setViewMode(modes[(modes.indexOf(ED.viewMode) + 1) % modes.length]);
+      break;
+    }
     case "Delete": case "Backspace": e.preventDefault(); deleteSelection(); break;
     case "Enter": if (ED.laserEdit) { e.preventDefault(); finalizeLaser(); } break;
     case "Escape":
