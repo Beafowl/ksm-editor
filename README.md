@@ -42,8 +42,9 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
 
 ## Game view
 
-**Tab** (or the Editor / Split / Game buttons in the top bar) switches to an in-game
-style 3D preview of the track, modeled on Unnamed SDVX Clone's camera
+The editor opens in **Split** view — the 2D editor next to an in-game style 3D
+preview. The **View** dropdown (or **Tab**) switches Editor / Split / Game. The
+3D track is modeled on Unnamed SDVX Clone's camera
 (`Main/src/Camera.cpp`): `zoom_top` pitches, `zoom_bottom` zooms, `zoom_side`
 shifts, `tilt` rolls (laser-driven, keyword and manual numeric), lane **spins /
 half-spins / swings** animate with USC's exact easing, and `stop` freezes the

@@ -89,7 +89,6 @@ kbd {
 #highwayWrap.view-editor #highway { flex-basis: 100%; }
 #highwayWrap.view-game #highway { display: none; }
 #highwayWrap.view-game #gameview { flex-basis: 100%; border-left: none; }
-.viewbtn.active { background: var(--accent2); border-color: var(--accent2); color: #04141c; font-weight: 600; }
 
 #sidebar {
   width: 232px;

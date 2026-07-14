@@ -19,11 +19,13 @@
     <input type="file" id="fileAudio" accept="audio/*,.ogg,.mp3,.wav,.flac,.m4a" hidden>
   </div>
   <select id="selDiff" style="display:none" title="Switch difficulty"></select>
-  <div class="group" id="viewBtns" title="View mode (Tab)">
-    <button class="viewbtn active" data-view="editor">Editor</button>
-    <button class="viewbtn" data-view="split">Split</button>
-    <button class="viewbtn" data-view="game">Game</button>
-  </div>
+  <label class="group" title="View mode (Tab cycles)">View
+    <select id="selView">
+      <option value="editor">Editor</option>
+      <option value="split" selected>Split</option>
+      <option value="game">Game</option>
+    </select>
+  </label>
   <div id="songTitle">No chart loaded</div>
   <div class="group right">
     <label>BPM <input id="inBpm" type="number" step="0.001" min="1" style="width:70px"></label>
@@ -37,7 +39,7 @@
 </header>
 
 <main id="main">
-  <div id="highwayWrap" class="view-editor">
+  <div id="highwayWrap" class="view-split">
     <canvas id="highway"></canvas>
     <canvas id="gameview"></canvas>
   </div>
@@ -174,7 +176,7 @@
       </ul>
       <h4>Game view</h4>
       <ul>
-        <li><kbd>Tab</kbd> (or the top-bar buttons) switches Editor / Split / Game view.</li>
+        <li><kbd>Tab</kbd> (or the View dropdown) switches Editor / Split / Game view. Split is the default.</li>
         <li>The game view renders the track in 3D with USC's camera: zoom_top/bottom/side, tilt (laser + manual), spins, swings and stops all animate. Scrub through a spin to preview it.</li>
         <li><b>Lane Speed</b> (numeric, any value) applies to both views; <kbd>Ctrl+Scroll</kbd> on either view adjusts it.</li>
       </ul>

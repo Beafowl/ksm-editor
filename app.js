@@ -7,7 +7,7 @@ const ED = {
   chart: null, timing: null, measures: [],
   curMs: 0, playing: false,
   zoom: 2, snapDiv: 16,
-  viewMode: "editor", hispeed: 1,
+  viewMode: "split", hispeed: 1,
   tool: "bt",
   sel: null, selList: [], hover: null,
   laserEdit: null, laserWideDefault: false,
@@ -443,8 +443,7 @@ function seekToMs(ms) {
 function setViewMode(mode) {
   ED.viewMode = mode;
   ED.dom.highwayWrap.className = "view-" + mode;
-  document.querySelectorAll(".viewbtn").forEach(b =>
-    b.classList.toggle("active", b.dataset.view === mode));
+  ED.dom.selView.value = mode;
 }
 
 // one lane-speed value drives both views: editor px/tick and game view scroll
@@ -1229,7 +1228,7 @@ function init() {
     "inspNone", "inspNote", "inspNoteInfo", "inspMulti", "inspMultiInfo", "fxEffectBox", "selFxType", "inFxParam",
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
     "spinBox", "selSpin", "inSpinLen", "eventList", "btnAddEvent",
-    "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd",
+    "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd", "selView",
     "fileKsh", "fileAudio", "metaModal", "helpModal",
     "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
     "btnMetaSave", "btnMetaCancel"])
@@ -1290,9 +1289,7 @@ function init() {
   });
 
   // view modes + game view input
-  document.querySelectorAll(".viewbtn").forEach(b => {
-    b.addEventListener("click", () => setViewMode(b.dataset.view));
-  });
+  d.selView.addEventListener("change", () => setViewMode(d.selView.value));
   d.inLaneSpeed.addEventListener("change", () => setLaneSpeed(parseFloat(d.inLaneSpeed.value)));
   d.gameview.addEventListener("wheel", e => {
     e.preventDefault();
