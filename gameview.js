@@ -355,15 +355,15 @@ function draw() {
     ctx.fillStyle = "#14141d";
     ctx.fill();
   }
-  // side sixths tinted like the game's track texture: blue left, red right
-  ctx.fillStyle = "rgba(35,60,220,0.28)";
+  // side sixths tinted with the laser colors, heavily faded
+  ctx.fillStyle = "rgba(0,170,255,0.13)";
   if (poly(ctx, [P(-TRACK_W/2, Y0), P(-2*BTN_W, Y0), P(-2*BTN_W, Y1), P(-TRACK_W/2, Y1)]))
     ctx.fill();
-  ctx.fillStyle = "rgba(220,30,45,0.26)";
+  ctx.fillStyle = "rgba(255,0,128,0.12)";
   if (poly(ctx, [P(2*BTN_W, Y0), P(TRACK_W/2, Y0), P(TRACK_W/2, Y1), P(2*BTN_W, Y1)]))
     ctx.fill();
 
-  // lane dividers: bright blue/red boundary lines, green BT dividers (track.png)
+  // lane dividers: laser-colored boundary lines, green BT dividers (track.png)
   const line = (x, style, width) => {
     const a = P(x, Y0), b = P(x, Y1);
     if (!a || !b) return;
@@ -371,9 +371,9 @@ function draw() {
     ctx.lineWidth = width;
     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
   };
-  for (let l = 1; l < 4; l++) line(-2 * BTN_W + l * BTN_W, "rgba(70,220,120,0.35)", 1);
-  line(-2 * BTN_W, "rgba(70,110,255,0.85)", 2);
-  line(2 * BTN_W, "rgba(255,60,70,0.85)", 2);
+  for (let l = 1; l < 4; l++) line(-2 * BTN_W + l * BTN_W, "rgba(70,220,120,0.30)", 1);
+  line(-2 * BTN_W, "rgba(0,170,255,0.55)", 2);
+  line(2 * BTN_W, "rgba(255,0,128,0.55)", 2);
   ctx.lineWidth = 1;
   // track edges
   ctx.strokeStyle = "rgba(200,200,255,0.35)";

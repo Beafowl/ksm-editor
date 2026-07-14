@@ -1185,19 +1185,21 @@ async function saveChart() {
 }
 
 function newChart() {
-  if (ED.dirty && !confirm("Discard unsaved changes?")) return;
-  const c = KSH.newChart();
-  if (AudioEng.fileName) c.meta.m = AudioEng.fileName;
-  setChart(c);
-  ED.kshHandle = null; ED.kshName = "";
-  ED.dom.selDiff.style.display = "none";
-  openMetaModal();
+  // nothing is created yet — the chart is only replaced when the dialog is confirmed
+  openMetaModal(true);
 }
 
 /* --------------------------- metadata --------------------------- */
 
-function openMetaModal() {
-  const m = ED.chart.meta, d = ED.dom;
+let metaModalIsNew = false;
+
+function openMetaModal(isNew = false) {
+  metaModalIsNew = isNew;
+  const d = ED.dom;
+  const m = isNew ? KSH.newChart().meta : ED.chart.meta;
+  if (isNew && AudioEng.fileName) m.m = AudioEng.fileName;
+  d.metaTitle.textContent = isNew ? "New chart" : "Chart metadata";
+  d.btnMetaSave.textContent = isNew ? "Create" : "Save";
   d.mTitle.value = m.title || ""; d.mArtist.value = m.artist || "";
   d.mEffect.value = m.effect || ""; d.mJacket.value = m.jacket || "";
   d.mDifficulty.value = DIFFICULTIES.includes(m.difficulty) ? m.difficulty : "light";
@@ -1206,14 +1208,28 @@ function openMetaModal() {
   d.metaModal.showModal();
 }
 function saveMetaModal() {
-  pushUndo();
-  const m = ED.chart.meta, d = ED.dom;
+  const d = ED.dom;
+  let chart = ED.chart;
+  if (metaModalIsNew) {
+    if (ED.dirty && !confirm("Discard unsaved changes and create a new chart?")) return;
+    chart = KSH.newChart();
+  } else {
+    pushUndo();
+  }
+  const m = chart.meta;
   m.title = d.mTitle.value; m.artist = d.mArtist.value;
   m.effect = d.mEffect.value; m.jacket = d.mJacket.value;
   m.difficulty = d.mDifficulty.value; m.level = d.mLevel.value;
   m.mvol = d.mMvol.value; m.m = d.mMusic.value;
-  applyVolumes(); markEdit(); updateTitle();
-  ED.dom.metaModal.close();
+  if (metaModalIsNew) {
+    setChart(chart);
+    ED.kshHandle = null; ED.kshName = "";
+    d.selDiff.style.display = "none";
+  } else {
+    markEdit();
+  }
+  applyVolumes(); updateTitle();
+  d.metaModal.close();
 }
 
 /* ------------------------------ init ------------------------------ */
@@ -1229,7 +1245,7 @@ function init() {
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
     "spinBox", "selSpin", "inSpinLen", "eventList", "btnAddEvent",
     "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd", "selView",
-    "fileKsh", "fileAudio", "metaModal", "helpModal",
+    "fileKsh", "fileAudio", "metaModal", "metaTitle", "helpModal",
     "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
     "btnMetaSave", "btnMetaCancel"])
     d[id] = $(id);
@@ -1396,7 +1412,7 @@ function init() {
   d.btnNew.addEventListener("click", newChart);
   d.btnSave.addEventListener("click", saveChart);
   d.selDiff.addEventListener("change", () => loadKshEntry(ED.kshFiles[parseInt(d.selDiff.value)]));
-  d.btnMeta.addEventListener("click", openMetaModal);
+  d.btnMeta.addEventListener("click", () => openMetaModal(false));
   d.btnHelp.addEventListener("click", () => d.helpModal.showModal());
   d.btnMetaSave.addEventListener("click", e => { e.preventDefault(); saveMetaModal(); });
   d.btnMetaCancel.addEventListener("click", e => { e.preventDefault(); d.metaModal.close(); });
