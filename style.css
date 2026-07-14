@@ -172,6 +172,52 @@ kbd {
   display: block;
 }
 
+/* ---------- launch screen ---------- */
+#launchScreen {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(ellipse at 50% 30%, #1a1a2e 0%, #0b0b13 65%, #07070c 100%);
+}
+.launch-inner { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.launch-inner h1 {
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  background: linear-gradient(90deg, var(--accent2), var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.launch-tagline { color: var(--dim); font-size: 15px; }
+.launch-btns { display: flex; gap: 16px; margin-top: 22px; }
+.launch-btns button {
+  font-size: 17px;
+  padding: 14px 30px;
+  border-radius: 8px;
+  border: 1px solid #3d3d58;
+  background: #1d1d2c;
+}
+.launch-btns button:hover { border-color: var(--accent2); background: #242438; }
+.launch-hint { color: #62627c; font-size: 12px; text-align: center; line-height: 1.6; margin-top: 6px; }
+.launch-footer {
+  position: absolute;
+  bottom: 22px;
+  color: var(--dim);
+  font-size: 13px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.launch-footer b { color: var(--text); }
+.launch-footer a { color: var(--accent2); text-decoration: none; }
+.launch-footer a:hover { text-decoration: underline; }
+
 /* ---------- toast ---------- */
 #toast {
   position: fixed;

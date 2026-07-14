@@ -1144,6 +1144,7 @@ async function openKshFile(file) {
   setChart(KSH.parse(text));
   ED.kshHandle = null; ED.kshName = file.name;
   ED.dom.selDiff.style.display = "none";
+  hideLaunch();
   const m = (ED.chart.meta.m || "").split(";")[0].trim();
   if (m && AudioEng.fileName !== m) toast(`Chart wants “${m}” — click Load Audio to pick it`);
   updateTitle();
@@ -1187,6 +1188,15 @@ async function saveChart() {
 function newChart() {
   // nothing is created yet — the chart is only replaced when the dialog is confirmed
   openMetaModal(true);
+}
+
+/* ------------------------- launch screen ------------------------- */
+
+let launchNewPending = false;
+
+function hideLaunch() {
+  launchNewPending = false;
+  if (ED.dom.launchScreen) ED.dom.launchScreen.style.display = "none";
 }
 
 /* --------------------------- metadata --------------------------- */
@@ -1246,6 +1256,7 @@ function init() {
     "spinBox", "selSpin", "inSpinLen", "eventList", "btnAddEvent",
     "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd", "selView",
     "fileKsh", "fileAudio", "metaModal", "metaTitle", "helpModal",
+    "launchScreen", "btnLaunchFolder", "btnLaunchNew",
     "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
     "btnMetaSave", "btnMetaCancel"])
     d[id] = $(id);
@@ -1408,7 +1419,34 @@ function init() {
   d.btnOpenKsh.addEventListener("click", () => d.fileKsh.click());
   d.fileKsh.addEventListener("change", () => { if (d.fileKsh.files[0]) openKshFile(d.fileKsh.files[0]); d.fileKsh.value = ""; });
   d.btnLoadAudio.addEventListener("click", () => d.fileAudio.click());
-  d.fileAudio.addEventListener("change", () => { if (d.fileAudio.files[0]) loadAudioFile(d.fileAudio.files[0]); d.fileAudio.value = ""; });
+  d.fileAudio.addEventListener("change", async () => {
+    const file = d.fileAudio.files[0];
+    d.fileAudio.value = "";
+    if (!file) { launchNewPending = false; return; }
+    await loadAudioFile(file);
+    if (launchNewPending && AudioEng.buffer) {
+      // launch-screen "New Chart": start a fresh chart on this audio
+      const c = KSH.newChart();
+      c.meta.m = AudioEng.fileName;
+      setChart(c);
+      ED.kshHandle = null; ED.kshName = "";
+      d.selDiff.style.display = "none";
+      hideLaunch();
+      openMetaModal(false);
+    }
+    launchNewPending = false;
+  });
+  d.fileAudio.addEventListener("cancel", () => { launchNewPending = false; });
+
+  // launch screen
+  d.btnLaunchFolder.addEventListener("click", async () => {
+    await openFolder();
+    if (ED.kshFiles.length) hideLaunch();
+  });
+  d.btnLaunchNew.addEventListener("click", () => {
+    launchNewPending = true;
+    d.fileAudio.click();
+  });
   d.btnNew.addEventListener("click", newChart);
   d.btnSave.addEventListener("click", saveChart);
   d.selDiff.addEventListener("change", () => loadKshEntry(ED.kshFiles[parseInt(d.selDiff.value)]));
