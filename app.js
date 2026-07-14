@@ -10,7 +10,7 @@ const ED = {
   viewMode: "split", hispeed: 1,
   tool: "bt",
   sel: null, selList: [], hover: null,
-  laserEdit: null, laserWideDefault: false,
+  laserEdit: null,
   drag: null,
   chartVersion: 0, dirty: false,
   undoStack: [], redoStack: [],
@@ -54,7 +54,6 @@ function savePrefs() {
       snapDiv: ED.snapDiv,
       hispeed: ED.hispeed,
       viewMode: ED.viewMode,
-      wide: ED.laserWideDefault,
       rate: AudioEng.rate,
       volMusic: ED.volMusic, volHit: ED.volHit, volMet: ED.volMet,
       opts: ED.opts,
@@ -72,7 +71,6 @@ function loadPrefs() {
     ED.zoom = 2 * p.hispeed;
   }
   if (["editor", "split", "game"].includes(p.viewMode)) ED.viewMode = p.viewMode;
-  ED.laserWideDefault = !!p.wide;
   if ([0.25, 0.5, 0.75, 1].includes(p.rate)) AudioEng.rate = p.rate;
   if (vol(p.volMusic) !== null) ED.volMusic = vol(p.volMusic);
   if (vol(p.volHit) !== null) ED.volHit = vol(p.volHit);
@@ -152,6 +150,19 @@ function hitInfo(x, y) {
 function laserVFrom(rel, wide) {
   let v = wide === 2 ? (rel + 0.5) / 2 : rel;
   return Math.round(Math.max(0, Math.min(1, v)) * 50) / 50;
+}
+
+// clearly outside the track => the laser must be 2x wide to reach there
+const relOutside = rel => rel < -0.05 || rel > 1.05;
+
+// convert a segment between 1x and 2x range, keeping points visually in place
+function setSegWide(seg, wide) {
+  if (seg.wide === wide) return;
+  seg.wide = wide;
+  for (const p of seg.points)
+    p.v = wide === 2
+      ? Math.round((p.v + 0.5) / 2 * 50) / 50
+      : Math.round(Math.max(0, Math.min(1, p.v * 2 - 0.5)) * 50) / 50;
 }
 
 function hitTest(x, y) {
@@ -278,12 +289,13 @@ function onHighwayDown(e) {
     if (!h.inWide || h.tick < 0) return;
     if (!ED.laserEdit) {
       pushUndo();
-      const seg = { points: [], wide: ED.laserWideDefault ? 2 : 1 };
+      const seg = { points: [], wide: relOutside(h.rel) ? 2 : 1 };
       seg.points.push({ y: h.tick, v: laserVFrom(h.rel, seg.wide) });
       c.lasers[side].push(seg);
       ED.laserEdit = { side, seg };
     } else {
       const seg = ED.laserEdit.seg;
+      if (relOutside(h.rel)) setSegWide(seg, 2); // reaches outside the track
       const pts = seg.points;
       const last = pts[pts.length - 1];
       const v = laserVFrom(h.rel, seg.wide);
@@ -400,6 +412,7 @@ function onHighwayMove(e) {
     if (d.bounds.min !== undefined) newY = Math.max(newY, d.bounds.min);
     if (d.bounds.max !== undefined) newY = Math.min(newY, d.bounds.max);
     pts[d.idx].y = Math.max(0, newY);
+    if (relOutside(h.rel)) setSegWide(d.seg, 2); // dragged outside the track
     pts[d.idx].v = laserVFrom(h.rel, d.seg.wide);
   }
 }
@@ -443,13 +456,13 @@ function updateHover(x, y) {
   else if (ED.tool === "fx" && h.inTrack) ED.hover = { kind: "fx", side: h.side, tick: h.tick };
   else if ((ED.tool === "laserL" || ED.tool === "laserR") && h.inWide) {
     const side = ED.tool === "laserL" ? 0 : 1;
-    const wide = ED.laserEdit ? ED.laserEdit.seg.wide : (ED.laserWideDefault ? 2 : 1);
+    const wide = relOutside(h.rel) ? 2 : (ED.laserEdit ? ED.laserEdit.seg.wide : 1);
     let tick = h.tick;
     if (ED.laserEdit) {
       const last = ED.laserEdit.seg.points[ED.laserEdit.seg.points.length - 1];
       if (last && tick <= last.y) tick = last.y + KSH.SLAM_TICKS;
     }
-    ED.hover = { kind: "laser", side, v: laserVFrom(h.rel, wide), tick };
+    ED.hover = { kind: "laser", side, v: laserVFrom(h.rel, wide), tick, wide };
   }
 }
 
@@ -996,6 +1009,9 @@ function updateInspector() {
     const f = ED.chart.filters.find(f => f.y === pts[0].y);
     setSelectValue(d.selFilter, f ? f.v : "");
     d.spinBox.style.display = sel.type === "laserpoint" ? "" : "none";
+    d.curveBox.style.display =
+      sel.type === "laserpoint" && sel.pt + 1 < pts.length &&
+      pts[sel.pt + 1].y - pts[sel.pt].y > KSH.SLAM_TICKS ? "" : "none";
     if (sel.type === "laserpoint") {
       const sp = ED.chart.spins.find(s => s.y === pts[sel.pt].y);
       const m = sp && /^(@\(|@\)|@<|@>|S<|S>)\s*(\d*)/.exec(sp.s);
@@ -1078,12 +1094,45 @@ function applyLaserProps() {
   const seg = ED.selSeg();
   if (!seg) return;
   pushUndo();
-  seg.wide = ED.dom.chkSegWide.checked ? 2 : 1;
+  setSegWide(seg, ED.dom.chkSegWide.checked ? 2 : 1); // keeps points visually in place
   const t0 = seg.points[0].y;
   const val = ED.dom.selFilter.value;
   ED.chart.filters = ED.chart.filters.filter(f => f.y !== t0);
   if (val) { ED.chart.filters.push({ y: t0, v: val }); ED.chart.filters.sort((a, b) => a.y - b.y); }
   markEdit(); updateInspector();
+}
+
+/* ------------------------- laser curving ------------------------- */
+
+const CURVE_SHAPES = {
+  easein: t => t * t,
+  easeout: t => 1 - (1 - t) * (1 - t),
+  smooth: t => (1 - Math.cos(Math.PI * t)) / 2,
+};
+
+// replace the straight span between point i and i+1 with an eased curve
+function curveToNextPoint() {
+  const sel = ED.sel;
+  if (!sel || sel.type !== "laserpoint") return;
+  const seg = sel.seg, i = sel.pt;
+  if (i + 1 >= seg.points.length) { toast("This is the laser's last point"); return; }
+  const a = seg.points[i], b = seg.points[i + 1];
+  const dy = b.y - a.y;
+  if (dy <= KSH.SLAM_TICKS) { toast("That span is a slam — nothing to curve"); return; }
+  const shape = CURVE_SHAPES[ED.dom.selCurve.value] || CURVE_SHAPES.smooth;
+  // subdivide at the snap grid (at least 1/32 notes, at most ~100 points)
+  let step = Math.max(6, Math.min(ED.snapTicks(), 48), Math.ceil(dy / 100 / 3) * 3);
+  const newPts = [];
+  let lastV = a.v;
+  for (let y = a.y + step; y <= b.y - step / 2; y += step) {
+    const v = Math.round((a.v + (b.v - a.v) * shape((y - a.y) / dy)) * 50) / 50;
+    if (v !== lastV) { newPts.push({ y, v }); lastV = v; }
+  }
+  if (!newPts.length) { toast("Span too short to curve at this snap"); return; }
+  pushUndo();
+  seg.points.splice(i + 1, 0, ...newPts);
+  markEdit(); updateInspector();
+  toast(`Curved with ${newPts.length} points`);
 }
 
 /* ---------------------------- file I/O ---------------------------- */
@@ -1290,10 +1339,10 @@ function init() {
   const d = ED.dom;
   for (const id of ["highway", "gameview", "highwayWrap", "inLaneSpeed", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
     "inBpm", "inOffset", "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
-    "chkMetronome", "chkHitsounds", "chkWaveform", "chkWide", "chkFxPreview",
+    "chkMetronome", "chkHitsounds", "chkWaveform", "chkFxPreview",
     "inspNone", "inspNote", "inspNoteInfo", "inspMulti", "inspMultiInfo", "fxEffectBox", "selFxType", "inFxParam",
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
-    "spinBox", "selSpin", "inSpinLen", "eventList", "btnAddEvent",
+    "spinBox", "selSpin", "inSpinLen", "curveBox", "selCurve", "btnCurve", "eventList", "btnAddEvent",
     "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd", "selView",
     "fileKsh", "fileAudio", "metaModal", "metaTitle", "helpModal",
     "launchScreen", "btnLaunchFolder", "btnLaunchNew",
@@ -1327,7 +1376,6 @@ function init() {
   d.chkHitsounds.checked = ED.opts.hitsounds;
   d.chkWaveform.checked = ED.opts.waveform;
   d.chkFxPreview.checked = ED.opts.fxPreview;
-  d.chkWide.checked = ED.laserWideDefault;
   setViewMode(ED.viewMode);
   for (const [v, label] of SPIN_TYPES) {
     const o = document.createElement("option"); o.value = v; o.textContent = label;
@@ -1397,7 +1445,6 @@ function init() {
     if (ED.playing) resetSched();
     savePrefs();
   });
-  d.chkWide.addEventListener("change", () => { ED.laserWideDefault = d.chkWide.checked; savePrefs(); });
 
   // timing inputs
   d.inBpm.addEventListener("change", () => {
@@ -1467,6 +1514,7 @@ function init() {
   d.selFilter.addEventListener("change", applyLaserProps);
   d.selSpin.addEventListener("change", applySpin);
   d.inSpinLen.addEventListener("change", applySpin);
+  d.btnCurve.addEventListener("click", curveToNextPoint);
   d.btnDelSel.addEventListener("click", deleteSelection);
 
   // files

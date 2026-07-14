@@ -22,7 +22,11 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
 - **BT / FX**: click a lane = chip, click-drag upward = hold, click an existing chip = remove.
 - **Lasers**: every click adds a point; clicking the same row makes a **slam**;
   `Enter` / `Esc` / double-click finishes the laser; right-click removes the last point.
-  “New lasers 2× wide” places `laserrange=2x` lasers.
+  Placing or dragging a point **outside the track** automatically turns the laser
+  into a 2× wide (`laserrange=2x`) one, keeping its points visually in place.
+- **Curves**: select a laser point, pick a shape (smooth / ease in / ease out) in the
+  Inspector and hit **Curve to next point** — the straight span is subdivided into an
+  eased curve at the current snap resolution.
 - **Right-click** deletes whatever is under the cursor. **Select** tool drags notes,
   resizes holds (grab the tail), and moves laser points. **Shift+click** builds a
   multi-selection: drag moves everything together, `Del` deletes all, and choosing

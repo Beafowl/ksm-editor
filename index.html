@@ -73,7 +73,6 @@
       </div>
       <label class="row"><span>Snap</span><select id="selSnap"></select></label>
       <label class="row" title="Scroll speed for both the editor and the game view (Ctrl+Scroll adjusts it too)"><span>Lane Speed</span><input id="inLaneSpeed" type="number" min="0.1" max="100" step="0.1" value="1" style="width:64px"></label>
-      <label class="chk"><input type="checkbox" id="chkWide"> New lasers 2× wide</label>
     </section>
 
     <section id="inspector">
@@ -101,6 +100,14 @@
           <label class="row"><span>Spin</span><select id="selSpin"></select></label>
           <label class="row"><span>Length</span><input id="inSpinLen" type="number" min="6" step="6" style="width:64px"></label>
           <div class="hint">Lane spin at this laser point (place on a slam).</div>
+        </div>
+        <div id="curveBox" style="display:none">
+          <label class="row"><span>Curve</span><select id="selCurve">
+            <option value="smooth">Smooth (S-curve)</option>
+            <option value="easein">Ease in (slow start)</option>
+            <option value="easeout">Ease out (fast start)</option>
+          </select></label>
+          <button id="btnCurve">Curve to next point</button>
         </div>
       </div>
       <button id="btnDelSel" class="danger">Delete selection <kbd>Del</kbd></button>
@@ -169,7 +176,8 @@
       <h4>Placing objects</h4>
       <ul>
         <li><b>BT / FX tool:</b> click a lane = chip · click-drag upward = hold · click an existing chip = remove it.</li>
-        <li><b>Laser tools:</b> each click adds a point. Click on the <i>same row</i> = slam. <kbd>Enter</kbd>/<kbd>Esc</kbd>/double-click finishes the laser, right-click removes the last point.</li>
+        <li><b>Laser tools:</b> each click adds a point. Click on the <i>same row</i> = slam. <kbd>Enter</kbd>/<kbd>Esc</kbd>/double-click finishes the laser, right-click removes the last point. Placing or dragging a point <b>outside the track</b> automatically makes the laser 2× wide (laserrange).</li>
+        <li><b>Curving:</b> select a laser point → pick a shape (smooth / ease in / ease out) → <b>Curve to next point</b> subdivides the span into an eased curve.</li>
         <li><b>Right-click</b> (any tool) deletes what's under the cursor.</li>
         <li><b>Select tool:</b> drag notes to move, drag a hold's tail to resize, drag laser points freely. <b>Shift+click</b> selects multiple objects — drag moves them together, <kbd>Del</kbd> deletes all, and picking an effect applies to every selected FX hold.</li>
       </ul>

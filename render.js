@@ -361,7 +361,7 @@ function drawHover(ctx, G) {
     ctx.fillRect(x + 1, yOfTick(h.tick) - 4, 2 * laneW - 2, 8);
   } else if (h.kind === "laser") {
     const col = h.side === 0 ? COL.laserL : COL.laserR;
-    const wide = ED.laserEdit ? ED.laserEdit.seg.wide : (ED.laserWideDefault ? 2 : 1);
+    const wide = h.wide || 1;
     const x = G.laserX(h.v, wide), y = yOfTick(h.tick);
     ctx.globalAlpha = 0.8;
     if (ED.laserEdit && ED.laserEdit.seg.points.length) {
