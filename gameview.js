@@ -418,9 +418,10 @@ function draw() {
       const span = clampSpan(yOf(n.y), yOf(n.y + n.l));
       if (!span) continue;
       if (poly(ctx, [P(x0, span[0]), P(x1, span[0]), P(x1, span[1]), P(x0, span[1])])) {
-        ctx.fillStyle = "rgba(235,235,255,0.30)";
+        // opaque so FX holds underneath don't tint them gray
+        ctx.fillStyle = "#f0f0f8";
         ctx.fill();
-        ctx.strokeStyle = "rgba(235,235,255,0.55)";
+        ctx.strokeStyle = "#a2a2c0";
         ctx.stroke();
       }
     }
@@ -440,9 +441,10 @@ function draw() {
         const isSlam = q.y - p.y <= KSH.SLAM_TICKS;
         let y0 = yOf(p.y), y1 = yOf(q.y);
         if (isSlam) {
-          // horizontal block at slam start
+          // horizontal block at slam start; extend to where the next segment
+          // begins (yOf(q.y)) so there is never a gap above the slam
           const xa = Math.min(lx(p.v), lx(q.v)) - BTN_W/2, xb = Math.max(lx(p.v), lx(q.v)) + BTN_W/2;
-          const yTop = Math.min(y0 + SLAM_H, Y1), yBot = Math.max(y0, Y0);
+          const yTop = Math.min(Math.max(y0 + SLAM_H, y1), Y1), yBot = Math.max(y0, Y0);
           if (yBot > Y1 || yTop < Y0) continue;
           if (poly(ctx, [P(xa, yBot), P(xb, yBot), P(xb, yTop), P(xa, yTop)])) {
             ctx.fillStyle = `rgba(${color},0.85)`;
