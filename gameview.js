@@ -420,51 +420,110 @@ function draw() {
     }
   }
 
-  // ---- lasers ----
-  const SLAM_H = 0.14;
+  // ---- lasers (USC style: additive glow, hues 200/330, BPM-scaled slams) ----
+  const LW = BTN_W;                                    // laser body width = Track::laserWidth
+  const LCOL = [[0, 170, 255], [255, 0, 128]];          // HSV(200,1,1) / HSV(330,1,1)
+  const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+  const LAYERS = [[1.0, 0.22], [0.55, 0.5], [0.22, 0.9]]; // [width factor, alpha] glow stack
+  // slam bar height = 0.1s of view distance (Camera::m_slamDuration)
+  const slamH = tick => {
+    const msPerTick = 60000 / (ED.timing.bpmAt(Math.max(0, tick)) * KSH.TICKS_PER_BEAT);
+    return (100 / msPerTick) / viewTicks * TRACK_LEN;
+  };
+  ctx.globalCompositeOperation = "lighter";
   for (let s = 0; s < 2; s++) {
-    const color = s === 0 ? "51,208,255" : "255,58,168";
+    const col = LCOL[s];
+    const core = col.map(v => Math.round(v + (255 - v) * 0.7));
     for (const seg of ED.chart.lasers[s]) {
       const pts = seg.points;
       if (pts[0].y > tMax || pts[pts.length - 1].y < tMin) continue;
       const lx = v => ((seg.wide === 2 ? v * 2 - 0.5 : v) - 0.5) * LASER_EFF_W;
+
+      // entry tail fading in below the first point
+      {
+        const x = lx(pts[0].v), yS = yOf(pts[0].y);
+        const yB = Math.max(yS - 1.0, Y0), yT = Math.min(yS, Y1);
+        if (yT > yB) {
+          const a = P(x, yB), b = P(x, yT);
+          if (a && b) {
+            const grad = ctx.createLinearGradient(a[0], a[1], b[0], b[1]);
+            grad.addColorStop(0, rgba(col, 0));
+            grad.addColorStop(1, rgba(col, 0.45));
+            if (poly(ctx, [P(x - LW / 2, yB), P(x + LW / 2, yB), P(x + LW / 2, yT), P(x - LW / 2, yT)])) {
+              ctx.fillStyle = grad; ctx.fill();
+            }
+          }
+        }
+      }
+
       for (let i = 0; i + 1 < pts.length; i++) {
         const p = pts[i], q = pts[i + 1];
         if (q.y < tMin || p.y > tMax) continue;
         const isSlam = q.y - p.y <= KSH.SLAM_TICKS;
-        let y0 = yOf(p.y), y1 = yOf(q.y);
+        const prevSlam = i > 0 && p.y - pts[i - 1].y <= KSH.SLAM_TICKS;
         if (isSlam) {
-          // horizontal block at slam start
-          const xa = Math.min(lx(p.v), lx(q.v)) - BTN_W/2, xb = Math.max(lx(p.v), lx(q.v)) + BTN_W/2;
-          const yTop = Math.min(y0 + SLAM_H, Y1), yBot = Math.max(y0, Y0);
-          if (yBot > Y1 || yTop < Y0) continue;
-          if (poly(ctx, [P(xa, yBot), P(xb, yBot), P(xb, yTop), P(xa, yTop)])) {
-            ctx.fillStyle = `rgba(${color},0.85)`;
-            ctx.fill();
-          }
+          // skewed bar from -0.5H to +1.5H around the slam tick, ends widened by the body
+          const H = slamH(p.y);
+          const span = clampSpan(yOf(p.y) - 0.5 * H, yOf(p.y) + 1.5 * H);
+          if (!span) continue;
+          const xa = lx(p.v), xb = lx(q.v);
+          const dir = Math.sign(xb - xa) || 1;
+          const xmin = Math.min(xa, xb), xmax = Math.max(xa, xb);
+          const bar = (w, skew, y0c, y1c, style) => {
+            if (y1c <= y0c) return;
+            if (poly(ctx, [
+              P(xmin - w + skew, y0c), P(xmax + w + skew, y0c),
+              P(xmax + w - skew, y1c), P(xmin - w - skew, y1c)])) {
+              ctx.fillStyle = style;
+              ctx.fill();
+            }
+          };
+          const sk = dir * LW / 2;
+          bar(LW / 2, sk, span[0], span[1], rgba(col, 0.18));                 // soft glow
+          bar(LW / 4, sk * 0.6, span[0] + 0.08 * H, span[1] - 0.08 * H, rgba(col, 0.62)); // body
+          const midY = (span[0] + span[1]) / 2, coreH = (span[1] - span[0]) * 0.16;
+          bar(LW / 8, sk * 0.3, midY - coreH, midY + coreH, rgba(core, 0.7)); // bright core stripe
         } else {
+          let y0 = yOf(p.y), y1 = yOf(q.y);
+          if (prevSlam) y0 = yOf(pts[i - 1].y) + slamH(pts[i - 1].y); // resume above the slam bar
+          if (y1 <= y0) continue;
           const span = clampSpan(y0, y1);
           if (!span) continue;
-          // interpolate x at clamped ends
-          const f0 = (span[0] - y0) / (y1 - y0 || 1), f1 = (span[1] - y0) / (y1 - y0 || 1);
+          const f0 = (span[0] - y0) / (y1 - y0), f1 = (span[1] - y0) / (y1 - y0);
           const xA = lx(p.v) + (lx(q.v) - lx(p.v)) * f0;
           const xB = lx(p.v) + (lx(q.v) - lx(p.v)) * f1;
-          if (poly(ctx, [P(xA - BTN_W/2, span[0]), P(xA + BTN_W/2, span[0]), P(xB + BTN_W/2, span[1]), P(xB - BTN_W/2, span[1])])) {
-            ctx.fillStyle = `rgba(${color},0.55)`;
-            ctx.fill();
+          for (const [wf, alpha] of LAYERS) {
+            const w = LW * wf;
+            if (poly(ctx, [P(xA - w / 2, span[0]), P(xA + w / 2, span[0]), P(xB + w / 2, span[1]), P(xB - w / 2, span[1])])) {
+              ctx.fillStyle = rgba(wf < 0.3 ? core : col, alpha);
+              ctx.fill();
+            }
           }
-          // bright core
-          const a = P(xA, span[0]), b = P(xB, span[1]);
+        }
+      }
+
+      // exit fade above the last point (above the bar when it ends on a slam)
+      {
+        const last = pts.length - 1;
+        const endsSlam = pts[last].y - pts[last - 1].y <= KSH.SLAM_TICKS;
+        const x = lx(pts[last].v);
+        const yE = endsSlam ? yOf(pts[last - 1].y) + 1.5 * slamH(pts[last - 1].y) : yOf(pts[last].y);
+        const yB = Math.max(yE, Y0), yT = Math.min(yE + 0.6, Y1);
+        if (yT > yB) {
+          const a = P(x, yB), b = P(x, yT);
           if (a && b) {
-            ctx.strokeStyle = `rgba(${color},0.95)`;
-            ctx.lineWidth = 2;
-            ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
-            ctx.lineWidth = 1;
+            const grad = ctx.createLinearGradient(a[0], a[1], b[0], b[1]);
+            grad.addColorStop(0, rgba(col, 0.5));
+            grad.addColorStop(1, rgba(col, 0));
+            if (poly(ctx, [P(x - LW / 2, yB), P(x + LW / 2, yB), P(x + LW / 2, yT), P(x - LW / 2, yT)])) {
+              ctx.fillStyle = grad; ctx.fill();
+            }
           }
         }
       }
     }
   }
+  ctx.globalCompositeOperation = "source-over";
 
   // ---- chips ----
   const CHIP_H = 0.10, FXCHIP_H = 0.12;

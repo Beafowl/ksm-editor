@@ -20,6 +20,8 @@ const AudioEng = {
 
   metGain: null,
 
+  _samples: {},
+
   ensureCtx() {
     if (this.ctx) return;
     this.ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -32,6 +34,19 @@ const AudioEng = {
     this.metGain = this.ctx.createGain();
     this.metGain.gain.value = 0.5;
     this.metGain.connect(this.ctx.destination);
+    this._loadGameSounds();
+  },
+
+  // decode the embedded USC skin sounds (sounds.js); synth clicks remain the fallback
+  _loadGameSounds() {
+    if (typeof GAME_SOUNDS === "undefined") return;
+    for (const [key, b64] of Object.entries(GAME_SOUNDS)) {
+      const bin = atob(b64);
+      const ab = new ArrayBuffer(bin.length);
+      const u8 = new Uint8Array(ab);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      this.ctx.decodeAudioData(ab).then(buf => { this._samples[key] = buf; }).catch(() => {});
+    }
   },
 
   async loadArrayBuffer(ab, name) {
@@ -141,7 +156,7 @@ const AudioEng = {
   scheduleClick(type, ctxTime) {
     if (!this.ctx) return;
     const src = this.ctx.createBufferSource();
-    src.buffer = this._clickBuf(type);
+    src.buffer = this._samples[type] || this._clickBuf(type);
     src.connect(type === "methi" || type === "metlo" ? this.metGain : this.clickGain);
     src.start(Math.max(ctxTime, this.ctx.currentTime));
   },

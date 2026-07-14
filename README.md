@@ -59,6 +59,9 @@ interactive next to the 3D preview.
   FX-hold effects (Retrigger, Gate, Wobble, Flanger, TapeStop, PitchShift, Echo,
   SideChain, BitCrusher, Phaser) and sweeps a filter with the lasers
   (`peak`/`lpf1`/`hpf1`). The in-game DSP will sound richer — treat it as a sketch.
+- Hitsounds are the actual USC default-skin samples (clap / punchy clap for BT/FX,
+  `laser_slam` for slams, `click-01/02` for the metronome), embedded in `sounds.js`
+  (regenerate with `tests/make_sounds.js` if the USC folder moves).
 - Song, hitsound and metronome volumes each have their own slider.
 
 ## Notes
