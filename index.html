@@ -45,13 +45,10 @@
   </label>
   <div id="songTitle">No chart loaded</div>
   <div class="group right">
-    <label>BPM <input id="inBpm" type="number" step="0.001" min="1" style="width:70px"></label>
     <button id="btnInsBpm" title="Insert a BPM change at the current position">+BPM</button>
-    <button id="btnTap" title="Tap BPM &amp; offset (T)">Tap</button>
     <button id="btnInsSig" title="Change the time signature from the current measure">+Sig</button>
     <button id="btnInsCmd" title="Insert a raw chart command at the cursor (zoom_top, tilt, stop, …)">+Cmd</button>
-    <label>Offset <input id="inOffset" type="number" step="1" style="width:64px"> ms</label>
-    <button id="btnMeta" title="Edit song metadata">Metadata</button>
+    <button id="btnSetup" title="Song setup: metadata, BPM &amp; offset, tap timing (T)">⚙ Setup</button>
     <button id="btnHelp" title="Shortcuts &amp; help">?</button>
   </div>
 </header>
@@ -146,42 +143,48 @@
 
 <div id="toast"></div>
 
-<dialog id="metaModal">
-  <form method="dialog">
-    <h3 id="metaTitle">Chart metadata</h3>
-    <label>Title <input id="mTitle" type="text"></label>
-    <label>Artist <input id="mArtist" type="text"></label>
-    <label>Effector <input id="mEffect" type="text"></label>
-    <label>Jacket <input id="mJacket" type="text" placeholder="jacket.png"></label>
-    <label>Difficulty <select id="mDifficulty"></select></label>
-    <label>Level <input id="mLevel" type="number" min="1" max="20"></label>
-    <label>Music file <input id="mMusic" type="text" placeholder="song.ogg"></label>
-    <label>Music volume <input id="mMvol" type="number" min="0" max="100"></label>
-    <div class="btnrow">
-      <button id="btnMetaSave" class="primary">Save</button>
-      <button id="btnMetaCancel">Cancel</button>
+<div id="setupScreen" style="display:none">
+  <div class="setup-card">
+    <h2 id="setupTitle">Song setup</h2>
+    <div class="setup-cols">
+      <section>
+        <h3>Metadata</h3>
+        <label>Title <input id="mTitle" type="text"></label>
+        <label>Artist <input id="mArtist" type="text"></label>
+        <label>Effector <input id="mEffect" type="text"></label>
+        <label>Jacket <input id="mJacket" type="text" placeholder="jacket.png"></label>
+        <label>Difficulty <select id="mDifficulty"></select></label>
+        <label>Level <input id="mLevel" type="number" min="1" max="20"></label>
+        <label>Music file <input id="mMusic" type="text" placeholder="song.ogg"></label>
+        <label>Music volume <input id="mMvol" type="number" min="0" max="100"></label>
+      </section>
+      <section>
+        <h3>Timing</h3>
+        <label>BPM <input id="sBpm" type="number" step="0.001" min="1"></label>
+        <label>Offset (ms) <input id="sOffset" type="number" step="1"></label>
+        <div class="hint">Offset = position in the audio where beat 1 lands.</div>
+        <h3 class="setup-sub">Tap to the beat</h3>
+        <p class="hint">Play the song (<kbd>Space</kbd>) and tap <kbd>T</kbd> — or the pad — on every beat.
+        8+ taps give a solid estimate; pausing 2&nbsp;s starts a fresh run. Works at slow playback speed too.</p>
+        <button id="btnTapPad">TAP</button>
+        <div class="tap-stats">
+          <span>Taps <b id="tapCount">0</b></span>
+          <span>BPM <b id="tapBpm">—</b></span>
+          <span>Offset <b id="tapOffset">—</b></span>
+        </div>
+        <div class="btnrow" style="justify-content:center">
+          <button id="btnTapReset">Reset</button>
+          <button id="btnTapUseBpm">Use BPM</button>
+          <button id="btnTapUseBoth">Use BPM + offset</button>
+        </div>
+      </section>
     </div>
-  </form>
-</dialog>
-
-<dialog id="tapModal">
-  <h3>Tap BPM &amp; offset</h3>
-  <p class="hint">Play the song (<kbd>Space</kbd>) and tap <kbd>T</kbd> — or the pad — on every beat.<br>
-  8+ taps give a solid estimate; pausing more than 2&nbsp;s starts a fresh run.<br>
-  Tapping works at slow playback speeds too. Turn on the metronome afterwards to verify.</p>
-  <button id="btnTapPad">TAP</button>
-  <div class="tap-stats">
-    <span>Taps <b id="tapCount">0</b></span>
-    <span>BPM <b id="tapBpm">—</b></span>
-    <span>Offset <b id="tapOffset">—</b></span>
+    <div class="btnrow">
+      <button id="btnSetupCancel">Cancel</button>
+      <button id="btnSetupDone" class="primary">Done</button>
+    </div>
   </div>
-  <div class="btnrow">
-    <button id="btnTapReset">Reset</button>
-    <button id="btnTapApplyBpm">Apply BPM</button>
-    <button id="btnTapApplyBoth" class="primary">Apply BPM + offset</button>
-    <button id="btnTapClose">Close</button>
-  </div>
-</dialog>
+</div>
 
 <dialog id="helpModal">
   <h3>KSM Chart Editor — Help</h3>
@@ -190,8 +193,8 @@
       <h4>Getting started</h4>
       <ol>
         <li><b>📂 Folder</b> opens a song folder (chart + audio auto-load, saving writes back). Or <b>Open .ksh</b> + <b>🎵 Audio</b> separately, or drag &amp; drop files.</li>
-        <li>For a new song: <b>🎵 Audio</b>, then <b>New</b>, set <b>BPM</b> and <b>Offset</b> (ms position in the audio where beat 1 lands), then chart away.</li>
-        <li><b>Tap timing</b> (<kbd>T</kbd> or the Tap button): play the song and tap <kbd>T</kbd> to the beat — BPM and offset are estimated and applied with one click.</li>
+        <li>For a new song: <b>🎵 Audio</b>, then <b>New</b> — the <b>Setup</b> page opens for metadata and timing.</li>
+        <li><b>⚙ Setup</b> (<kbd>T</kbd>): one page for metadata (title, artist, difficulty, …) and timing — set <b>BPM</b> and <b>Offset</b> directly, or play the song and tap <kbd>T</kbd> to the beat to estimate both.</li>
         <li><b>💾 Save</b> writes the .ksh (or downloads it if no folder is open).</li>
       </ol>
       <h4>Placing objects</h4>

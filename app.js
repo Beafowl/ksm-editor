@@ -1154,8 +1154,10 @@ function updateTitle() {
 }
 
 function syncInputsFromChart() {
-  ED.dom.inBpm.value = KSH.fmtNum(ED.chart.bpms[0].v);
-  ED.dom.inOffset.value = Math.round(parseFloat(ED.chart.meta.o) || 0);
+  // BPM/offset now live on the setup page; refresh it when visible
+  if (!ED.dom.setupScreen || !setupOpen()) return;
+  ED.dom.sBpm.value = KSH.fmtNum(ED.chart.bpms[0].v);
+  ED.dom.sOffset.value = Math.round(parseFloat(ED.chart.meta.o) || 0);
 }
 
 function setChart(chart) {
@@ -1275,8 +1277,65 @@ async function saveChart() {
 }
 
 function newChart() {
-  // nothing is created yet — the chart is only replaced when the dialog is confirmed
-  openMetaModal(true);
+  // nothing is created yet — the chart is only replaced when Create is pressed
+  openSetup(true);
+}
+
+/* --------------------------- setup page --------------------------- */
+
+let setupIsNew = false;
+
+function setupOpen() { return ED.dom.setupScreen.style.display !== "none"; }
+
+function openSetup(isNew = false) {
+  setupIsNew = isNew;
+  const d = ED.dom;
+  const src = isNew ? KSH.newChart() : ED.chart;
+  const m = src.meta;
+  if (isNew && AudioEng.fileName) m.m = AudioEng.fileName;
+  d.setupTitle.textContent = isNew ? "New chart" : "Song setup";
+  d.btnSetupDone.textContent = isNew ? "Create" : "Done";
+  d.mTitle.value = m.title || ""; d.mArtist.value = m.artist || "";
+  d.mEffect.value = m.effect || ""; d.mJacket.value = m.jacket || "";
+  d.mDifficulty.value = DIFFICULTIES.includes(m.difficulty) ? m.difficulty : "light";
+  d.mLevel.value = m.level || "1"; d.mMvol.value = m.mvol || "75";
+  d.mMusic.value = m.m || "";
+  d.sBpm.value = KSH.fmtNum(src.bpms[0].v);
+  d.sOffset.value = Math.round(parseFloat(m.o) || 0);
+  tapReset();
+  d.setupScreen.style.display = "";
+}
+
+function closeSetup() { ED.dom.setupScreen.style.display = "none"; }
+
+function applySetup() {
+  const d = ED.dom;
+  const bpm = parseFloat(d.sBpm.value);
+  if (!isFinite(bpm) || bpm <= 0) { toast("Invalid BPM"); return; }
+  const off = Math.round(parseFloat(d.sOffset.value) || 0);
+  let chart = ED.chart;
+  if (setupIsNew) {
+    if (ED.dirty && !confirm("Discard unsaved changes and create a new chart?")) return;
+    chart = KSH.newChart();
+  } else {
+    pushUndo();
+  }
+  const m = chart.meta;
+  m.title = d.mTitle.value; m.artist = d.mArtist.value;
+  m.effect = d.mEffect.value; m.jacket = d.mJacket.value;
+  m.difficulty = d.mDifficulty.value; m.level = d.mLevel.value;
+  m.mvol = d.mMvol.value; m.m = d.mMusic.value;
+  m.o = String(off);
+  chart.bpms[0].v = bpm;
+  if (setupIsNew) {
+    setChart(chart);
+    ED.kshHandle = null; ED.kshName = "";
+    d.selDiff.style.display = "none";
+  } else {
+    rebuildTiming(); markEdit();
+  }
+  applyVolumes(); updateTitle();
+  closeSetup();
 }
 
 /* --------------------------- BPM tapping --------------------------- */
@@ -1319,8 +1378,8 @@ function tapDisplayBpm(raw) {
 }
 
 // beat phase of the taps (circular mean), applied as the smallest
-// correction to the current offset so measure alignment is kept
-function tapOffsetEstimate(bpm) {
+// correction to the reference offset so measure alignment is kept
+function tapOffsetEstimate(bpm, ref) {
   const ts = tap.audio.filter(t => t !== null);
   if (!bpm || ts.length < 4) return null;
   const P = 60000 / bpm;
@@ -1330,7 +1389,7 @@ function tapOffsetEstimate(bpm) {
     sx += Math.cos(a); sy += Math.sin(a);
   }
   const phase = Math.atan2(sy, sx) / (2 * Math.PI) * P;
-  const cur = parseFloat(ED.chart.meta.o) || 0;
+  const cur = isFinite(ref) ? ref : 0;
   let delta = (phase - cur) % P;
   if (delta > P / 2) delta -= P;
   if (delta < -P / 2) delta += P;
@@ -1344,20 +1403,21 @@ function updateTapUI() {
   d.tapCount.textContent = tapSeries().length;
   d.tapBpm.textContent = bpm === null ? "—"
     : bpm + (Math.abs(raw - bpm) > 0.005 ? ` (raw ${raw.toFixed(2)})` : "");
-  const off = tapOffsetEstimate(bpm);
+  const off = tapOffsetEstimate(bpm, parseFloat(d.sOffset.value));
   d.tapOffset.textContent = off !== null ? off + " ms" : (bpm !== null && !ED.playing ? "tap while playing" : "—");
 }
 
-function applyTap(withOffset) {
+// write tap results into the setup form (applied on Done/Create)
+function useTap(withOffset) {
   const bpm = tapDisplayBpm(tapBpmEstimate());
   if (bpm === null) { toast("Tap at least 4 beats first"); return; }
-  const off = withOffset ? tapOffsetEstimate(bpm) : null;
-  if (withOffset && off === null) { toast("Offset needs taps while the song plays"); return; }
-  pushUndo();
-  ED.chart.bpms[0].v = bpm;
-  if (off !== null) ED.chart.meta.o = String(off);
-  rebuildTiming(); markEdit(); syncInputsFromChart();
-  toast(`Applied ♩=${bpm}${off !== null ? ` · offset ${off} ms` : ""}`);
+  ED.dom.sBpm.value = bpm;
+  if (withOffset) {
+    const off = tapOffsetEstimate(bpm, parseFloat(ED.dom.sOffset.value));
+    if (off === null) { toast("Offset needs taps while the song plays"); return; }
+    ED.dom.sOffset.value = off;
+  }
+  toast(`♩=${bpm}${withOffset ? " + offset" : ""} filled in — ${setupIsNew ? "Create" : "Done"} applies it`);
 }
 
 /* ------------------------- launch screen ------------------------- */
@@ -1369,49 +1429,6 @@ function hideLaunch() {
   if (ED.dom.launchScreen) ED.dom.launchScreen.style.display = "none";
 }
 
-/* --------------------------- metadata --------------------------- */
-
-let metaModalIsNew = false;
-
-function openMetaModal(isNew = false) {
-  metaModalIsNew = isNew;
-  const d = ED.dom;
-  const m = isNew ? KSH.newChart().meta : ED.chart.meta;
-  if (isNew && AudioEng.fileName) m.m = AudioEng.fileName;
-  d.metaTitle.textContent = isNew ? "New chart" : "Chart metadata";
-  d.btnMetaSave.textContent = isNew ? "Create" : "Save";
-  d.mTitle.value = m.title || ""; d.mArtist.value = m.artist || "";
-  d.mEffect.value = m.effect || ""; d.mJacket.value = m.jacket || "";
-  d.mDifficulty.value = DIFFICULTIES.includes(m.difficulty) ? m.difficulty : "light";
-  d.mLevel.value = m.level || "1"; d.mMvol.value = m.mvol || "75";
-  d.mMusic.value = m.m || "";
-  d.metaModal.showModal();
-}
-function saveMetaModal() {
-  const d = ED.dom;
-  let chart = ED.chart;
-  if (metaModalIsNew) {
-    if (ED.dirty && !confirm("Discard unsaved changes and create a new chart?")) return;
-    chart = KSH.newChart();
-  } else {
-    pushUndo();
-  }
-  const m = chart.meta;
-  m.title = d.mTitle.value; m.artist = d.mArtist.value;
-  m.effect = d.mEffect.value; m.jacket = d.mJacket.value;
-  m.difficulty = d.mDifficulty.value; m.level = d.mLevel.value;
-  m.mvol = d.mMvol.value; m.m = d.mMusic.value;
-  if (metaModalIsNew) {
-    setChart(chart);
-    ED.kshHandle = null; ED.kshName = "";
-    d.selDiff.style.display = "none";
-  } else {
-    markEdit();
-  }
-  applyVolumes(); updateTitle();
-  d.metaModal.close();
-}
-
 /* ------------------------------ init ------------------------------ */
 
 function $(id) { return document.getElementById(id); }
@@ -1419,18 +1436,18 @@ function $(id) { return document.getElementById(id); }
 function init() {
   const d = ED.dom;
   for (const id of ["highway", "gameview", "highwayWrap", "inLaneSpeed", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
-    "inBpm", "inOffset", "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
+    "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
     "chkMetronome", "chkHitsounds", "chkWaveform", "chkFxPreview",
     "inspNone", "inspNote", "inspNoteInfo", "inspMulti", "inspMultiInfo", "fxEffectBox", "selFxType", "inFxParam",
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
     "spinBox", "selSpin", "inSpinLen", "curveBox", "selCurve", "btnCurve", "eventList", "btnAddEvent",
-    "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnMeta", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd", "selView",
-    "fileKsh", "fileAudio", "metaModal", "metaTitle", "helpModal",
+    "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd", "selView",
+    "fileKsh", "fileAudio", "helpModal",
     "launchScreen", "btnLaunchFolder", "btnLaunchNew",
-    "btnTap", "tapModal", "btnTapPad", "tapCount", "tapBpm", "tapOffset",
-    "btnTapReset", "btnTapApplyBpm", "btnTapApplyBoth", "btnTapClose",
-    "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
-    "btnMetaSave", "btnMetaCancel"])
+    "setupScreen", "setupTitle", "btnSetup", "btnSetupDone", "btnSetupCancel",
+    "sBpm", "sOffset", "btnTapPad", "tapCount", "tapBpm", "tapOffset",
+    "btnTapReset", "btnTapUseBpm", "btnTapUseBoth",
+    "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic"])
     d[id] = $(id);
 
   loadPrefs();
@@ -1530,20 +1547,6 @@ function init() {
   });
 
   // timing inputs
-  d.inBpm.addEventListener("change", () => {
-    const v = parseFloat(d.inBpm.value);
-    if (!isFinite(v) || v <= 0) { syncInputsFromChart(); return; }
-    pushUndo();
-    ED.chart.bpms[0].v = v;
-    rebuildTiming(); markEdit();
-  });
-  d.inOffset.addEventListener("change", () => {
-    const v = parseFloat(d.inOffset.value);
-    if (!isFinite(v)) { syncInputsFromChart(); return; }
-    pushUndo();
-    ED.chart.meta.o = String(Math.round(v));
-    rebuildTiming(); markEdit();
-  });
   d.btnInsBpm.addEventListener("click", () => {
     const tick = snapTick(ED.timing.msToTick(ED.curMs));
     const cur = ED.timing.bpmAt(Math.max(0, tick));
@@ -1618,7 +1621,7 @@ function init() {
       ED.kshHandle = null; ED.kshName = "";
       d.selDiff.style.display = "none";
       hideLaunch();
-      openMetaModal(false);
+      openSetup(false);
     }
     launchNewPending = false;
   });
@@ -1636,24 +1639,16 @@ function init() {
   d.btnNew.addEventListener("click", newChart);
   d.btnSave.addEventListener("click", saveChart);
   d.selDiff.addEventListener("change", () => loadKshEntry(ED.kshFiles[parseInt(d.selDiff.value)]));
-  d.btnMeta.addEventListener("click", () => openMetaModal(false));
-
-  // tap BPM/offset dialog
-  const openTapModal = () => { tapReset(); d.tapModal.showModal(); };
-  d.btnTap.addEventListener("click", openTapModal);
+  // setup page (metadata + timing + tap tool)
+  d.btnSetup.addEventListener("click", () => openSetup(false));
+  d.btnSetupDone.addEventListener("click", applySetup);
+  d.btnSetupCancel.addEventListener("click", closeSetup);
   d.btnTapPad.addEventListener("click", tapNow);
   d.btnTapReset.addEventListener("click", tapReset);
-  d.btnTapApplyBpm.addEventListener("click", () => applyTap(false));
-  d.btnTapApplyBoth.addEventListener("click", () => applyTap(true));
-  d.btnTapClose.addEventListener("click", () => d.tapModal.close());
-  d.tapModal.addEventListener("keydown", e => {
-    if (e.key === " ") { e.preventDefault(); togglePlay(); }
-    else if (e.key.toLowerCase() === "t") { e.preventDefault(); tapNow(); }
-    else if (e.key === "Escape") { /* default close */ }
-  });
+  d.btnTapUseBpm.addEventListener("click", () => useTap(false));
+  d.btnTapUseBoth.addEventListener("click", () => useTap(true));
+  d.sOffset.addEventListener("change", updateTapUI);
   d.btnHelp.addEventListener("click", () => d.helpModal.showModal());
-  d.btnMetaSave.addEventListener("click", e => { e.preventDefault(); saveMetaModal(); });
-  d.btnMetaCancel.addEventListener("click", e => { e.preventDefault(); d.metaModal.close(); });
 
   // drag & drop
   window.addEventListener("dragover", e => e.preventDefault());
@@ -1687,6 +1682,13 @@ function onKeyDown(e) {
     if (e.key === "Escape") document.activeElement.blur();
     return;
   }
+  if (setupOpen()) {
+    if (e.key === " ") { e.preventDefault(); togglePlay(); }
+    else if (e.key.toLowerCase() === "t") { e.preventDefault(); tapNow(); }
+    else if (e.key === "Escape") closeSetup();
+    else if (e.key === "Enter") applySetup();
+    return;
+  }
   const ctrl = e.ctrlKey || e.metaKey;
   if (ctrl && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (ctrl && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
@@ -1713,8 +1715,7 @@ function onKeyDown(e) {
     case "5": setTool("laserR"); break;
     case "t": case "T":
       e.preventDefault();
-      tapReset();
-      ED.dom.tapModal.showModal();
+      openSetup(false);
       break;
     case "Tab": {
       e.preventDefault();

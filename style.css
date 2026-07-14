@@ -267,7 +267,7 @@ dialog {
 dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 dialog h3 { margin-bottom: 12px; }
 dialog h4 { margin: 10px 0 4px; color: var(--accent2); font-size: 12px; }
-dialog form label, #metaModal label {
+dialog form label {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -275,7 +275,49 @@ dialog form label, #metaModal label {
   margin-bottom: 8px;
   color: var(--dim);
 }
-#metaModal input, #metaModal select { width: 200px; }
+
+/* ---------- setup page ---------- */
+#setupScreen {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 5, 10, 0.78);
+}
+.setup-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px 26px;
+  width: min(780px, 94vw);
+  max-height: 92vh;
+  overflow-y: auto;
+}
+.setup-card h2 { margin-bottom: 16px; }
+.setup-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 30px; }
+.setup-cols h3, .setup-sub {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--dim);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-bottom: 10px;
+}
+.setup-sub { margin-top: 16px; }
+.setup-cols label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--dim);
+}
+.setup-cols input, .setup-cols select { width: 165px; }
+.setup-cols .hint { margin-bottom: 6px; }
+@media (max-width: 720px) { .setup-cols { grid-template-columns: 1fr; } }
 .btnrow { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .help2col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; font-size: 12px; }
 .help2col ul, .help2col ol { padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }

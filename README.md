@@ -14,7 +14,7 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
 |---|---|
 | Open a whole song folder | **📂 Folder** — picks up all `.ksh` difficulties + the audio (`m=`) automatically; **Save** writes straight back to the folder. Chromium only. |
 | Open a single chart | **Open .ksh** (then **🎵 Audio** to pick the song), or just drag & drop the files onto the window. |
-| Start a new chart | **🎵 Audio** → **New** → fill in metadata → set **BPM** and **Offset** (ms position in the audio where beat 1 lands). |
+| Start a new chart | **🎵 Audio** → **New** — the **Setup** page opens for metadata and timing. |
 
 ## Editing
 
@@ -37,9 +37,11 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
   **laser** → toggle 2× wide and set the filter (`peak` / `lpf1` / `hpf1` / `bitc`).
 - **Spins**: select a **laser point** → add a lane spin / half-spin / swing with a
   length (put them on slams).
-- **Tap timing** (`T` or the Tap button, osu!-style): play the song and tap to the
-  beat — BPM is fitted from your taps (works at slow playback speeds too) and the
-  offset from their beat phase; apply either with one click.
+- **Setup page** (`T` or the ⚙ Setup button): metadata (title, artist, difficulty,
+  level, music file, volume) and timing on one page. Set **BPM** / **Offset** (ms
+  position in the audio where beat 1 lands) directly, or use the osu!-style tap
+  tool: play the song and tap to the beat — BPM is fitted from your taps (works at
+  slow playback speeds too) and the offset from their beat phase.
 - **Timing & camera**: **+BPM** and **+Sig** insert tempo / time-signature changes at
   the cursor; **+Cmd** / “+ Add event” insert commands (`zoom_top`, `zoom_bottom`,
   `zoom_side`, `tilt`, `stop`, …). The **Events** panel lists everything in the
