@@ -428,6 +428,8 @@ function draw() {
   }
 
   // ---- lasers ----
+  // "screen" blending: L/R overlap becomes clearly brighter lavender
+  ctx.globalCompositeOperation = "screen";
   const SLAM_H = 0.14;
   for (let s = 0; s < 2; s++) {
     const color = s === 0 ? "51,208,255" : "255,58,168";
@@ -487,6 +489,7 @@ function draw() {
       }
     }
   }
+  ctx.globalCompositeOperation = "source-over";
 
   // ---- chips ----
   const CHIP_H = 0.10, FXCHIP_H = 0.12;

@@ -181,6 +181,9 @@ function drawHighway() {
   }
 
   // ---- lasers ----
+  // "screen" blending keeps single lasers looking the same on the dark
+  // track but turns L/R overlap into a clearly brighter lavender
+  ctx.globalCompositeOperation = "screen";
   const bandW = laneW * 0.5;
   for (let s = 0; s < 2; s++) {
     const col = s === 0 ? COL.laserL : COL.laserR;
@@ -242,6 +245,8 @@ function drawHighway() {
     }
   }
 
+  ctx.globalCompositeOperation = "source-over";
+
   // ---- event labels (right side) ----
   ctx.textAlign = "left";
   const labX = trackX + trackW + gutter + 8;
@@ -268,7 +273,7 @@ function drawHighway() {
   {
     ctx.fillStyle = "rgba(150,150,175,0.75)";
     let i = 0;
-    const others = ED.chart.other;
+    const others = ED.chart.other.filter(o => !o.s.startsWith("//bm:"));
     while (i < others.length) {
       const y0 = others[i].y;
       let j = i;
@@ -282,6 +287,23 @@ function drawHighway() {
       }
       i = j;
     }
+  }
+  // bookmarks: teal line across the track + flag label on the left
+  for (const o of ED.chart.other) {
+    if (!o.s.startsWith("//bm:") || o.y < tMin || o.y > tMax) continue;
+    const y = Math.round(yOfTick(o.y)) + 0.5;
+    ctx.strokeStyle = "#4de3c0";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(trackX - gutter, y); ctx.lineTo(trackX + trackW + gutter, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+    ctx.fillStyle = "#4de3c0";
+    ctx.textAlign = "right";
+    ctx.fillText("⚑ " + (o.s.slice(5) || "bookmark"), trackX - gutter - 8, y - 5);
+    ctx.textAlign = "left";
   }
 
   // ---- selection highlight ----
@@ -421,6 +443,15 @@ function drawTimeline() {
         c.fillStyle = s === 0 ? "rgba(51,204,255,0.8)" : "rgba(255,74,168,0.8)";
         c.fillRect(xOfMs(m0), H - 4, Math.max(2, xOfMs(m1) - xOfMs(m0)), 3);
       }
+    // bookmark flags along the top edge
+    c.fillStyle = "#4de3c0";
+    for (const o of ED.chart.other) {
+      if (!o.s.startsWith("//bm:")) continue;
+      const x = xOfMs(ED.timing.tickToMs(o.y));
+      c.beginPath();
+      c.moveTo(x - 4, 0); c.lineTo(x + 4, 0); c.lineTo(x, 7);
+      c.closePath(); c.fill();
+    }
   }
   ctx.clearRect(0, 0, W, H);
   ctx.drawImage(tlCache, 0, 0, W, H);

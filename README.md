@@ -47,6 +47,9 @@ Open `index.html` in **Chrome or Edge** (double-click works — no server or ins
   `zoom_side`, `tilt`, `stop`, …). The **Events** panel lists everything in the
   current measure with readable labels, tooltips explaining each command, and ✎ / ×
   to edit or delete. A full **Chart events reference** lives in the ? help dialog.
+- **Bookmarks**: `B` adds/removes a bookmark at the cursor, `,` / `.` jump between
+  them. They show as teal flags on the highway and timeline, can be renamed in the
+  Events panel, and are saved as `//` comments in the .ksh (ignored by the game).
 - `Ctrl+Z` / `Ctrl+Y` undo/redo · `Del` delete selection · `Ctrl+S` save.
 
 ## Game view

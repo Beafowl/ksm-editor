@@ -778,6 +778,37 @@ function updateTimeDisplay() {
   renderEventList(m);
 }
 
+/* ---------------------------- bookmarks ---------------------------- */
+// stored as "//bm:<name>" comment lines in chart.other — saved in the
+// .ksh file, ignored by the game
+
+const isBookmark = o => o.s.startsWith("//bm:");
+
+function toggleBookmark() {
+  const tick = Math.max(0, snapTick(ED.timing.msToTick(ED.curMs)));
+  const existing = ED.chart.other.find(o => o.y === tick && isBookmark(o));
+  pushUndo();
+  if (existing) {
+    ED.chart.other = ED.chart.other.filter(o => o !== existing);
+    toast("Bookmark removed");
+  } else {
+    ED.chart.other.push({ y: tick, s: "//bm:" });
+    ED.chart.other.sort((a, b) => a.y - b.y);
+    toast("Bookmark added at " + tickLabel(tick) + " — rename it in the Events panel");
+  }
+  markEdit();
+}
+
+function jumpBookmark(dir) {
+  const tick = ED.timing.msToTick(ED.curMs);
+  const bms = ED.chart.other.filter(isBookmark);
+  const target = dir > 0
+    ? bms.find(o => o.y > tick + 1)
+    : [...bms].reverse().find(o => o.y < tick - 1);
+  if (target) seekToMs(ED.timing.tickToMs(target.y));
+  else toast("No bookmark " + (dir > 0 ? "ahead" : "behind"));
+}
+
 /* ---------------- events panel (current measure) ---------------- */
 
 // key -> [badge, explanation] for raw commands; also used by the help modal
@@ -889,6 +920,16 @@ function renderEventList(m) {
     });
   }
   for (const o of ED.chart.other) if (inM(o)) {
+    if (isBookmark(o)) {
+      rows.push({
+        y: o.y, tag: "Bookmark", txt: o.s.slice(5) || "(unnamed)",
+        expl: "Editor bookmark — saved as a // comment in the file, ignored by the game. Toggle with B.",
+        raw: o.s,
+        del: () => { ED.chart.other = ED.chart.other.filter(x => x !== o); },
+        edit: () => promptEdit("Bookmark name:", o.s.slice(5), v => { o.s = "//bm:" + v; }),
+      });
+      continue;
+    }
     const eq = o.s.indexOf("=");
     const okey = eq > 0 ? o.s.slice(0, eq) : o.s;
     const oval = eq > 0 ? o.s.slice(eq + 1) : "";
@@ -1717,6 +1758,9 @@ function onKeyDown(e) {
       e.preventDefault();
       openSetup(false);
       break;
+    case "b": case "B": e.preventDefault(); toggleBookmark(); break;
+    case ".": e.preventDefault(); jumpBookmark(1); break;
+    case ",": e.preventDefault(); jumpBookmark(-1); break;
     case "Tab": {
       e.preventDefault();
       const modes = ["editor", "split", "game"];
