@@ -11,6 +11,19 @@
   --accent2: #33ccff;
 }
 
+/* dark scrollbars (help dialog, sidebar, setup/prefs cards) */
+* { scrollbar-width: thin; scrollbar-color: #32324a transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #32324a;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #44445e; background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
 html, body { height: 100%; }
 body {
   display: flex;
@@ -78,6 +91,29 @@ kbd {
   white-space: nowrap;
   max-width: 34vw;
 }
+.savewrap { position: relative; }
+.savemenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 170px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.savemenu button {
+  background: none;
+  border: none;
+  border-radius: 4px;
+  text-align: left;
+  padding: 6px 10px;
+}
+.savemenu button:hover { background: #2a2a40; }
 
 /* ---------- main ---------- */
 #main { display: flex; flex: 1; min-height: 0; }
@@ -218,6 +254,44 @@ kbd {
 .launch-footer a { color: var(--accent2); text-decoration: none; }
 .launch-footer a:hover { text-decoration: underline; }
 
+/* ---------- add-event dialog ---------- */
+#eventModal { width: 440px; } /* fixed: the explanation text wraps instead of resizing the dialog */
+.ev-form label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--dim);
+}
+.ev-form input, .ev-form select { width: 200px; }
+.ev-form .sigpair { display: flex; align-items: center; gap: 6px; width: 200px; }
+.ev-form .sigpair input { width: 100%; }
+#evExplain {
+  background: var(--panel2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  min-height: 52px;
+  margin: 10px 0 2px;
+}
+
+/* ---------- event tooltip ---------- */
+#evTip {
+  position: fixed;
+  display: none;
+  z-index: 120;
+  max-width: 300px;
+  background: #1d1d2e;
+  border: 1px solid #3d3d5c;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: pre-line;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
 /* ---------- toast ---------- */
 #toast {
   position: fixed;
@@ -259,6 +333,7 @@ dialog {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 18px;
+  margin: auto; /* re-center: the global reset zeroes the UA's dialog margin */
   min-width: 330px;
   max-width: min(860px, 92vw);
   max-height: 88vh;
@@ -276,8 +351,8 @@ dialog form label {
   color: var(--dim);
 }
 
-/* ---------- setup page ---------- */
-#setupScreen {
+/* ---------- setup / preferences pages ---------- */
+#setupScreen, #prefsScreen {
   position: fixed;
   inset: 0;
   z-index: 90;
@@ -316,6 +391,7 @@ dialog form label {
   color: var(--dim);
 }
 .setup-cols input, .setup-cols select { width: 165px; }
+.setup-cols input[type="checkbox"] { width: auto; }
 .setup-cols .hint { margin-bottom: 6px; }
 @media (max-width: 720px) { .setup-cols { grid-template-columns: 1fr; } }
 .btnrow { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }

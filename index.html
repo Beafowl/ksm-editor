@@ -27,11 +27,13 @@
 
 <header id="topbar">
   <div class="group">
-    <button id="btnOpenFolder" title="Open a song folder (Chrome/Edge) — loads chart + audio together">📂 Folder</button>
-    <button id="btnOpenKsh" title="Open a single .ksh file">Open .ksh</button>
-    <button id="btnLoadAudio" title="Load the song audio (ogg/mp3/wav)">🎵 Audio</button>
-    <button id="btnNew" title="New chart">New</button>
-    <button id="btnSave" title="Save chart (Ctrl+S)">💾 Save</button>
+    <div id="saveWrap" class="savewrap">
+      <button id="btnSave" title="Save (Ctrl+S saves the .ksh)">💾 Save ▾</button>
+      <div id="saveMenu" class="savemenu" style="display:none">
+        <button id="btnSaveKsh" title="Write the current chart to its .ksh file (Ctrl+S)">Save .ksh</button>
+        <button id="btnSaveZip" title="Download the whole song folder as a .zip archive">Save folder as .zip</button>
+      </div>
+    </div>
     <input type="file" id="fileKsh" accept=".ksh" hidden>
     <input type="file" id="fileAudio" accept="audio/*,.ogg,.mp3,.wav,.flac,.m4a" hidden>
   </div>
@@ -45,10 +47,8 @@
   </label>
   <div id="songTitle">No chart loaded</div>
   <div class="group right">
-    <button id="btnInsBpm" title="Insert a BPM change at the current position">+BPM</button>
-    <button id="btnInsSig" title="Change the time signature from the current measure">+Sig</button>
-    <button id="btnInsCmd" title="Insert a raw chart command at the cursor (zoom_top, tilt, stop, …)">+Cmd</button>
     <button id="btnSetup" title="Song setup: metadata, BPM &amp; offset, tap timing (T)">⚙ Setup</button>
+    <button id="btnPrefs" title="Editor preferences: snap, lane speeds, playback">🎚 Preferences</button>
     <button id="btnHelp" title="Shortcuts &amp; help">?</button>
   </div>
 </header>
@@ -69,8 +69,6 @@
         <button class="toolbtn laserl" data-tool="laserL">Laser L <kbd>4</kbd></button>
         <button class="toolbtn laserr" data-tool="laserR">Laser R <kbd>5</kbd></button>
       </div>
-      <label class="row"><span>Snap</span><select id="selSnap"></select></label>
-      <label class="row" title="Scroll speed for both the editor and the game view (Ctrl+Scroll adjusts it too)"><span>Lane Speed</span><input id="inLaneSpeed" type="number" min="0.1" max="100" step="0.1" value="1" style="width:64px"></label>
     </section>
 
     <section id="inspector">
@@ -118,17 +116,6 @@
       <div class="hint">Hover an event for what it does — full reference under <b>?</b>. ✎ edits, × deletes.</div>
     </section>
 
-    <section>
-      <h3>Playback</h3>
-      <label class="row"><span>Speed</span><select id="selRate"></select></label>
-      <label class="col"><span>Song</span><input id="inVolMusic" type="range" min="0" max="1" step="0.05" value="0.8"></label>
-      <label class="col"><span>Hitsounds</span><input id="inVolHit" type="range" min="0" max="1" step="0.05" value="0.7"></label>
-      <label class="col"><span>Metronome</span><input id="inVolMet" type="range" min="0" max="1" step="0.05" value="0.7"></label>
-      <label class="chk"><input type="checkbox" id="chkHitsounds" checked> Hitsounds</label>
-      <label class="chk"><input type="checkbox" id="chkMetronome"> Metronome</label>
-      <label class="chk"><input type="checkbox" id="chkWaveform" checked> Waveform</label>
-      <label class="chk" title="Approximate audible preview of FX-hold effects and the laser filter"><input type="checkbox" id="chkFxPreview" checked> FX preview</label>
-    </section>
   </aside>
 </main>
 
@@ -142,6 +129,7 @@
 </footer>
 
 <div id="toast"></div>
+<div id="evTip"></div>
 
 <div id="setupScreen" style="display:none">
   <div class="setup-card">
@@ -186,16 +174,59 @@
   </div>
 </div>
 
+<div id="prefsScreen" style="display:none">
+  <div class="setup-card">
+    <h2>Preferences</h2>
+    <div class="setup-cols">
+      <section>
+        <h3>Editing</h3>
+        <label>Snap <select id="selSnap"></select></label>
+        <label title="Scroll speed of the editor view (Ctrl+Scroll on it adjusts this too)">Editor lane speed <input id="inLaneSpeed" type="number" min="0.1" max="100" step="0.1" value="1"></label>
+        <label title="Scroll speed of the game view (Ctrl+Scroll on it adjusts this too)">Game lane speed <input id="inGameSpeed" type="number" min="0.1" max="100" step="0.1" value="1"></label>
+      </section>
+      <section>
+        <h3>Playback</h3>
+        <label title="Playback speed — the pitch is preserved">Speed <select id="selRate"></select></label>
+        <label>Song volume <input id="inVolMusic" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+        <label>Hitsound volume <input id="inVolHit" type="range" min="0" max="1" step="0.05" value="0.7"></label>
+        <label>Metronome volume <input id="inVolMet" type="range" min="0" max="1" step="0.05" value="0.7"></label>
+        <label class="chk" title="Tick sounds for BT/FX notes — laser slams always play">Hitsounds <input type="checkbox" id="chkHitsounds" checked></label>
+        <label class="chk">Metronome <input type="checkbox" id="chkMetronome"></label>
+      </section>
+    </div>
+    <div class="btnrow">
+      <button id="btnPrefsClose" class="primary">Close</button>
+    </div>
+  </div>
+</div>
+
+<dialog id="eventModal">
+  <h3 id="evTitle">Add event</h3>
+  <div class="ev-form">
+    <label><span>Event</span><select id="selEvKind"></select></label>
+    <label id="evRowNum"><span>Value</span><input id="inEvNum" type="number" step="any"></label>
+    <label id="evRowChoice"><span>Value</span><select id="selEvChoice"></select></label>
+    <label id="evRowSig"><span>Signature</span><span class="sigpair"><input id="inEvSigN" type="number" min="1" max="256" value="4"> <b>/</b> <input id="inEvSigD" type="number" min="1" value="4"></span></label>
+    <label id="evRowText"><span>Value</span><input id="inEvText" type="text"></label>
+  </div>
+  <p id="evExplain" class="hint"></p>
+  <div class="btnrow">
+    <button id="btnEvCancel" type="button">Cancel</button>
+    <button id="btnEvInsert" class="primary" type="button">Insert</button>
+  </div>
+</dialog>
+
 <dialog id="helpModal">
   <h3>KSM Chart Editor — Help</h3>
   <div class="help2col">
     <div>
       <h4>Getting started</h4>
       <ol>
-        <li><b>📂 Folder</b> opens a song folder (chart + audio auto-load, saving writes back). Or <b>Open .ksh</b> + <b>🎵 Audio</b> separately, or drag &amp; drop files.</li>
-        <li>For a new song: <b>🎵 Audio</b>, then <b>New</b> — the <b>Setup</b> page opens for metadata and timing.</li>
+        <li><b>📂 Load Folder</b> (launch screen) opens a song folder — chart + audio auto-load and saving writes back. You can also drag &amp; drop .ksh / audio files anywhere.</li>
+        <li>For a new song: <b>✚ New Chart</b> on the launch screen — pick the audio, then the <b>Setup</b> page opens for metadata and timing.</li>
         <li><b>⚙ Setup</b> (<kbd>T</kbd>): one page for metadata (title, artist, difficulty, …) and timing — set <b>BPM</b> and <b>Offset</b> directly, or play the song and tap <kbd>T</kbd> to the beat to estimate both.</li>
-        <li><b>💾 Save</b> writes the .ksh (or downloads it if no folder is open).</li>
+        <li><b>💾 Save</b> ▾: <b>Save .ksh</b> writes the chart (or downloads it if no folder is open); <b>Save folder as .zip</b> downloads the whole song folder as an archive.</li>
+        <li>The chart list next to Save switches between the folder's difficulties — <b>＋ New .ksh…</b> adds a new one that shares the song's audio and timing.</li>
       </ol>
       <h4>Placing objects</h4>
       <ul>
@@ -210,7 +241,7 @@
         <li>Select an <b>FX hold</b> → pick effect + parameter in the Inspector (Retrigger;8, Gate;16, Flanger, …). Custom <code>#define_fx</code> effects from the chart appear too.</li>
         <li>Select a <b>laser</b> → toggle 2× wide (laserrange) and set the filter type (peak / lpf1 / hpf1 / bitc / custom).</li>
         <li>Select a <b>laser point</b> → add a lane <b>spin / half-spin / swing</b> with a length (place them on slams).</li>
-        <li><b>+BPM</b> / <b>+Sig</b> insert tempo &amp; time-signature changes at the cursor; <b>+Cmd</b> inserts raw lines (zoom_top, tilt, stop, …).</li>
+        <li><b>+ Add event at cursor</b> (Events panel) opens a form listing every event type — tempo, time signature, camera, tilt, stop, … — with the matching input and an explanation of what it does. “Custom command” takes any raw line.</li>
         <li>The <b>Events</b> panel lists everything in the current measure — delete with ×.</li>
       </ul>
     </div>
@@ -228,7 +259,7 @@
       <ul>
         <li><kbd>Tab</kbd> (or the View dropdown) switches Editor / Split / Game view. Split is the default.</li>
         <li>The game view renders the track in 3D with USC's camera: zoom_top/bottom/side, tilt (laser + manual), spins, swings and stops all animate. Scrub through a spin to preview it.</li>
-        <li><b>Lane Speed</b> (numeric, any value) applies to both views; <kbd>Ctrl+Scroll</kbd> on either view adjusts it.</li>
+        <li>Editor and game lane speeds are set separately in <b>🎚 Preferences</b>; <kbd>Ctrl+Scroll</kbd> on a view adjusts that view's speed.</li>
       </ul>
       <h4>Tools</h4>
       <ul>
@@ -241,16 +272,16 @@
       <h4>Notes</h4>
       <ul>
         <li>Unknown chart lines are preserved verbatim on save.</li>
-        <li><b>FX preview</b> plays an approximation of hold effects and the laser filter during playback (toggle in the Playback panel). The game's own DSP will sound richer.</li>
-        <li>Song, hitsound and metronome volumes are independent sliders.</li>
+        <li>Playback previews an approximation of FX-hold effects and the laser filter — the game's own DSP will sound richer. <b>Hitsounds</b> (Preferences) toggles the note ticks; laser slams always play.</li>
+        <li><b>🎚 Preferences</b> holds snap, lane speeds, playback speed and volumes. Slowing playback keeps the song's pitch.</li>
       </ul>
     </div>
   </div>
   <h4>Chart events reference</h4>
-  <p class="hint" style="margin-bottom:6px">Everything the Events panel can show. Insert with <b>+Cmd</b> / “+ Add event”; camera values interpolate linearly between two keyframes of the same command.</p>
+  <p class="hint" style="margin-bottom:6px">Everything the Events panel can show. Insert with <b>+ Add event at cursor</b>; camera values interpolate linearly between two keyframes of the same command.</p>
   <table class="evref">
     <tr><td><code>t=185</code></td><td>BPM (tempo) change.</td></tr>
-    <tr><td><code>beat=7/8</code></td><td>Time signature — sets the measure length (use <b>+Sig</b>).</td></tr>
+    <tr><td><code>beat=7/8</code></td><td>Time signature — sets the measure length, applied from the current measure.</td></tr>
     <tr><td><code>filtertype=peak</code></td><td>Filter sound while a laser moves: <code>peak</code> (wah), <code>lpf1</code> (low-pass), <code>hpf1</code> (high-pass), <code>bitc</code> (bitcrush) or a <code>#define_filter</code> name. Set per-laser via the Inspector.</td></tr>
     <tr><td><code>zoom_top=50</code></td><td>Camera pitch — tips the far end of the track down (+) or up (−).</td></tr>
     <tr><td><code>zoom_bottom=-75</code></td><td>Camera zoom — pulls the camera away (−) or pushes it in (+).</td></tr>
@@ -269,6 +300,7 @@
 </dialog>
 
 <script src="ksh.js"></script>
+<script src="zip.js"></script>
 <script src="sounds.js"></script>
 <script src="audio.js"></script>
 <script src="fxdsp.js"></script>

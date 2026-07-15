@@ -43,24 +43,30 @@ const puppeteer = require("puppeteer-core");
   });
   console.log("spin applied:", JSON.stringify(spin), spin.added === "@(96" && spin.boxShown ? "OK" : "FAIL");
 
-  // 4. +Sig with prompt override
+  // 4. time signature via the add-event dialog
   const sig = await page.evaluate(() => {
-    window.prompt = () => "7/8";
     ED.curMs = ED.timing.tickToMs(KSH.measureAt(ED.measures, 0).ticks * 3); // measure 4
-    ED.dom.btnInsSig.click();
+    ED.dom.btnAddEvent.click();
+    ED.dom.selEvKind.value = [...ED.dom.selEvKind.options].find(o => o.textContent === "Time signature").value;
+    ED.dom.selEvKind.dispatchEvent(new Event("change"));
+    ED.dom.inEvSigN.value = 7; ED.dom.inEvSigD.value = 8;
+    ED.dom.btnEvInsert.click();
     return ED.chart.sigs.map(s => `${s.y}:${s.n}/${s.d}`).slice(0, 3);
   });
-  console.log("+Sig 7/8 at measure 4:", JSON.stringify(sig), sig.some(s => s.endsWith("7/8")) ? "OK" : "FAIL");
+  console.log("time sig 7/8 at measure 4:", JSON.stringify(sig), sig.some(s => s.endsWith("7/8")) ? "OK" : "FAIL");
   await page.evaluate(() => undo()); // revert sig for clean serialize compare
 
-  // 5. +Cmd insertion
+  // 5. raw command via the dialog's custom option
   const cmd = await page.evaluate(() => {
-    window.prompt = () => "zoom_top=42";
     ED.curMs = 0;
-    ED.dom.btnInsCmd.click();
+    ED.dom.btnAddEvent.click();
+    ED.dom.selEvKind.value = String(EV_KINDS.length - 1); // Custom command…
+    ED.dom.selEvKind.dispatchEvent(new Event("change"));
+    ED.dom.inEvText.value = "zoom_top=42";
+    ED.dom.btnEvInsert.click();
     return ED.chart.other.filter(o => o.s === "zoom_top=42").length;
   });
-  console.log("+Cmd zoom_top=42 inserted:", cmd === 1 ? "OK" : "FAIL");
+  console.log("custom zoom_top=42 inserted:", cmd === 1 ? "OK" : "FAIL");
 
   // 6. spin + cmd survive serialize round-trip
   const rt = await page.evaluate(() => {

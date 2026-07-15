@@ -1,20 +1,25 @@
 "use strict";
 /* ============================================================
- * Audio engine: song playback (Web Audio), waveform peaks,
+ * Audio engine: song playback (media element through Web Audio,
+ * so changing the speed keeps the pitch), waveform peaks,
  * synthesized hitsounds / metronome clicks.
  * ============================================================ */
 
 const AudioEng = {
   ctx: null,
-  buffer: null,
+  buffer: null,      // decoded copy: waveform peaks, duration, FX preview slices
   fileName: "",
-  srcNode: null,
+  mediaEl: null,     // song playback element — playbackRate preserves pitch
+  mediaNode: null,
+  mediaUrl: null,
   musicGain: null,
   clickGain: null,
   playing: false,
   rate: 1,
   _startCtx: 0,
   _startMs: 0,
+  _pending: null,    // timer for a lead-in start before audio time 0
+  _endCtx: null,     // ctx time when the media ended (chart longer than song)
   peaks: null,       // Float32Array of |peak| per bin
   peakMs: 4,         // ms per bin
 
@@ -52,7 +57,17 @@ const AudioEng = {
   async loadArrayBuffer(ab, name) {
     this.ensureCtx();
     this.stop();
+    const blob = new Blob([ab.slice(0)]); // copy: decodeAudioData detaches ab
     this.buffer = await this.ctx.decodeAudioData(ab);
+    if (this.mediaUrl) URL.revokeObjectURL(this.mediaUrl);
+    this.mediaUrl = URL.createObjectURL(blob);
+    if (!this.mediaEl) {
+      this.mediaEl = new Audio();
+      this.mediaEl.preservesPitch = true; // time-stretch: slow playback keeps pitch
+      this.mediaNode = this.ctx.createMediaElementSource(this.mediaEl);
+      this.mediaNode.connect(typeof FXDSP !== "undefined" ? FXDSP.input() : this.musicGain);
+    }
+    this.mediaEl.src = this.mediaUrl;
     this.fileName = name || "";
     this._startMs = 0;
     this.buildPeaks();
@@ -61,42 +76,55 @@ const AudioEng = {
   durationMs() { return this.buffer ? this.buffer.duration * 1000 : 0; },
 
   play(fromMs) {
-    if (!this.buffer) return false;
+    if (!this.buffer || !this.mediaEl) return false;
     this.ensureCtx();
     if (this.ctx.state === "suspended") this.ctx.resume();
     this.stop();
-    const src = this.ctx.createBufferSource();
-    src.buffer = this.buffer;
-    src.playbackRate.value = this.rate;
-    src.connect(typeof FXDSP !== "undefined" ? FXDSP.input() : this.musicGain);
-    const now = this.ctx.currentTime;
-    if (fromMs >= 0) src.start(now, Math.min(fromMs, this.durationMs()) / 1000);
-    else src.start(now + (-fromMs / 1000) / this.rate, 0);
-    this.srcNode = src;
-    this._startCtx = now;
+    const el = this.mediaEl;
+    el.playbackRate = this.rate;
+    this._startCtx = this.ctx.currentTime;
     this._startMs = fromMs;
     this.playing = true;
+    if (fromMs >= 0) {
+      el.currentTime = Math.min(fromMs, this.durationMs()) / 1000;
+      el.play().catch(() => {});
+    } else {
+      // negative offset: wait out the lead-in on the ctx clock, then start at 0
+      el.currentTime = 0;
+      this._pending = setTimeout(() => {
+        this._pending = null;
+        if (this.playing) el.play().catch(() => {});
+      }, -fromMs / this.rate);
+    }
     return true;
   },
 
   positionMs() {
-    return this.playing
-      ? this._startMs + (this.ctx.currentTime - this._startCtx) * 1000 * this.rate
-      : this._startMs;
+    if (!this.playing) return this._startMs;
+    if (this._pending)
+      return this._startMs + (this.ctx.currentTime - this._startCtx) * 1000 * this.rate;
+    if (this.mediaEl.ended) {
+      // keep the playhead moving past the song's end (chart may be longer)
+      if (this._endCtx === null) this._endCtx = this.ctx.currentTime;
+      return this.durationMs() + (this.ctx.currentTime - this._endCtx) * 1000 * this.rate;
+    }
+    this._endCtx = null;
+    return this.mediaEl.currentTime * 1000;
   },
 
-  msToCtxTime(ms) { return this._startCtx + (ms - this._startMs) / 1000 / this.rate; },
+  msToCtxTime(ms) { return this.ctx.currentTime + (ms - this.positionMs()) / 1000 / this.rate; },
 
   stop() {
-    if (this.srcNode) {
-      try { this.srcNode.stop(); } catch (e) { /* not started yet */ }
-      this.srcNode.disconnect();
-      this.srcNode = null;
-    }
+    if (this._pending) { clearTimeout(this._pending); this._pending = null; }
+    if (this.mediaEl && !this.mediaEl.paused) this.mediaEl.pause();
+    this._endCtx = null;
     this.playing = false;
   },
 
-  setRate(r) { this.rate = r; },
+  setRate(r) {
+    this.rate = r;
+    if (this.mediaEl && this.playing) this.mediaEl.playbackRate = r;
+  },
   setMusicVolume(v) { this.ensureCtx(); this.musicGain.gain.value = Math.max(0, Math.min(1, v)); },
   setClickVolume(v) { this.ensureCtx(); this.clickGain.gain.value = Math.max(0, Math.min(1, v)); },
   setMetVolume(v) { this.ensureCtx(); this.metGain.gain.value = Math.max(0, Math.min(1, v)); },
@@ -132,22 +160,38 @@ const AudioEng = {
   _clicks: {},
   _clickBuf(type) {
     if (this._clicks[type]) return this._clicks[type];
-    const sr = this.ctx.sampleRate, len = Math.round(sr * 0.06);
-    const buf = this.ctx.createBuffer(1, len, sr);
-    const d = buf.getChannelData(0);
-    const spec = {
-      bt:    { f: 1568, decay: 90,  noise: 0.25 },
-      fx:    { f: 660,  decay: 60,  noise: 0.55 },
-      slam:  { f: 330,  decay: 45,  noise: 0.85 },
-      methi: { f: 1760, decay: 110, noise: 0.0  },
-      metlo: { f: 880,  decay: 110, noise: 0.0  },
-    }[type] || { f: 1000, decay: 80, noise: 0 };
+    const sr = this.ctx.sampleRate;
     let seed = 1;
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647 * 2 - 1;
-    for (let i = 0; i < len; i++) {
-      const t = i / sr;
-      const env = Math.exp(-t * spec.decay);
-      d[i] = env * ((1 - spec.noise) * Math.sin(2 * Math.PI * spec.f * t) + spec.noise * rnd()) * 0.9;
+    let buf;
+    if (type === "bt" || type === "fx") {
+      // pitchless tick: a few ms of high-passed noise with a very fast decay —
+      // no tonal component, so it reads as "tick", not a pitched click
+      const decay = type === "bt" ? 1100 : 700;
+      const hp = type === "bt" ? 0.93 : 0.78;
+      const len = Math.round(sr * 0.03);
+      buf = this.ctx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      let prev = 0;
+      for (let i = 0; i < len; i++) {
+        const x = rnd() * Math.exp(-(i / sr) * decay);
+        d[i] = (x - prev * hp) * 0.7;
+        prev = x;
+      }
+    } else {
+      const len = Math.round(sr * 0.06);
+      buf = this.ctx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      const spec = {
+        slam:  { f: 330,  decay: 45,  noise: 0.85 },
+        methi: { f: 1760, decay: 110, noise: 0.0  },
+        metlo: { f: 880,  decay: 110, noise: 0.0  },
+      }[type] || { f: 1000, decay: 80, noise: 0 };
+      for (let i = 0; i < len; i++) {
+        const t = i / sr;
+        const env = Math.exp(-t * spec.decay);
+        d[i] = env * ((1 - spec.noise) * Math.sin(2 * Math.PI * spec.f * t) + spec.noise * rnd()) * 0.9;
+      }
     }
     this._clicks[type] = buf;
     return buf;
@@ -156,7 +200,10 @@ const AudioEng = {
   scheduleClick(type, ctxTime) {
     if (!this.ctx) return;
     const src = this.ctx.createBufferSource();
-    src.buffer = this._samples[type] || this._clickBuf(type);
+    // bt/fx always use the synthesized tick — the skin's claps/clicks sound pitched
+    src.buffer = (type === "bt" || type === "fx")
+      ? this._clickBuf(type)
+      : this._samples[type] || this._clickBuf(type);
     src.connect(type === "methi" || type === "metlo" ? this.metGain : this.clickGain);
     src.start(Math.max(ctxTime, this.ctx.currentTime));
   },

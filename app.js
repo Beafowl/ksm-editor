@@ -7,16 +7,17 @@ const ED = {
   chart: null, timing: null, measures: [],
   curMs: 0, playing: false,
   zoom: 2, snapDiv: 16,
-  viewMode: "split", hispeed: 1,
+  viewMode: "split",
+  edSpeed: 1, hispeed: 1, // editor / game view lane speeds (zoom = 2 * edSpeed)
   tool: "bt",
   sel: null, selList: [], hover: null,
   laserEdit: null,
   drag: null,
   chartVersion: 0, dirty: false,
   undoStack: [], redoStack: [],
-  dirHandle: null, kshHandle: null, kshName: "", kshFiles: [],
+  dirHandle: null, kshHandle: null, kshName: "", kshFiles: [], audioRaw: null,
   volMusic: 0.8, volHit: 0.7, volMet: 0.7,
-  opts: { metronome: false, hitsounds: true, waveform: true, fxPreview: true },
+  opts: { metronome: false, hitsounds: true },
   dom: {}, G: null,
 
   snapTicks() { return KSH.WHOLE_TICKS / this.snapDiv; },
@@ -52,7 +53,8 @@ function savePrefs() {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify({
       snapDiv: ED.snapDiv,
-      hispeed: ED.hispeed,
+      edSpeed: ED.edSpeed,
+      gameSpeed: ED.hispeed,
       viewMode: ED.viewMode,
       rate: AudioEng.rate,
       volMusic: ED.volMusic, volHit: ED.volHit, volMet: ED.volMet,
@@ -66,10 +68,11 @@ function loadPrefs() {
   try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}"); } catch (e) { return; }
   const vol = v => (isFinite(v) ? Math.max(0, Math.min(1, v)) : null);
   if (SNAP_DIVS.includes(p.snapDiv)) ED.snapDiv = p.snapDiv;
-  if (isFinite(p.hispeed) && p.hispeed >= 0.1 && p.hispeed <= 100) {
-    ED.hispeed = p.hispeed;
-    ED.zoom = 2 * p.hispeed;
-  }
+  const spd = v => (isFinite(v) && v >= 0.1 && v <= 100 ? v : null);
+  const es = spd(p.edSpeed) || spd(p.hispeed); // p.hispeed: pre-split prefs
+  const gs = spd(p.gameSpeed) || spd(p.hispeed);
+  if (es) { ED.edSpeed = es; ED.zoom = 2 * es; }
+  if (gs) ED.hispeed = gs;
   if (["editor", "split", "game"].includes(p.viewMode)) ED.viewMode = p.viewMode;
   if ([0.25, 0.5, 0.75, 1].includes(p.rate)) AudioEng.rate = p.rate;
   if (vol(p.volMusic) !== null) ED.volMusic = vol(p.volMusic);
@@ -469,7 +472,7 @@ function updateHover(x, y) {
 function onHighwayWheel(e) {
   e.preventDefault();
   if (e.ctrlKey) {
-    setLaneSpeed(ED.hispeed * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+    setEditorSpeed(ED.edSpeed * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
   } else {
     seekBySnap(e.deltaY < 0 ? 1 : -1);
   }
@@ -498,13 +501,20 @@ function setViewMode(mode) {
   savePrefs();
 }
 
-// one lane-speed value drives both views: editor px/tick and game view scroll
-function setLaneSpeed(v) {
-  if (!isFinite(v)) { ED.dom.inLaneSpeed.value = ED.hispeed; return; }
+// separate lane speeds: editor px/tick (zoom) and game view scroll
+function setEditorSpeed(v) {
+  if (!isFinite(v)) { ED.dom.inLaneSpeed.value = ED.edSpeed; return; }
   v = Math.max(0.1, Math.min(100, v));
-  ED.hispeed = v;
+  ED.edSpeed = v;
   ED.zoom = 2 * v;
   ED.dom.inLaneSpeed.value = Math.round(v * 100) / 100;
+  savePrefs();
+}
+function setGameSpeed(v) {
+  if (!isFinite(v)) { ED.dom.inGameSpeed.value = ED.hispeed; return; }
+  v = Math.max(0.1, Math.min(100, v));
+  ED.hispeed = v;
+  ED.dom.inGameSpeed.value = Math.round(v * 100) / 100;
   savePrefs();
 }
 
@@ -681,7 +691,7 @@ function resetSched() {
   schedPtr = 0;
   while (schedPtr < hitEvents.length && hitEvents[schedPtr].ms <= pos) schedPtr++;
   metNextTick = nextBeatTick(ED.timing.msToTick(pos));
-  if (AudioEng.playing && ED.opts.fxPreview) FXDSP.apply(buildFxRegions(), pos);
+  if (AudioEng.playing) FXDSP.apply(buildFxRegions(), pos);
   else FXDSP.clear();
 }
 function nextBeatTick(fromTick) {
@@ -695,11 +705,12 @@ function scheduler() {
   if (hitDirty) { buildHitEvents(); resetSched(); }
   const pos = AudioEng.positionMs();
   const horizon = pos + 180 * AudioEng.rate;
-  if (ED.opts.hitsounds) {
-    while (schedPtr < hitEvents.length && hitEvents[schedPtr].ms <= horizon) {
-      const ev = hitEvents[schedPtr++];
-      if (ev.ms >= pos - 30) AudioEng.scheduleClick(ev.type, AudioEng.msToCtxTime(ev.ms));
-    }
+  // laser slams always play; BT/FX ticks only when hitsounds are enabled
+  while (schedPtr < hitEvents.length && hitEvents[schedPtr].ms <= horizon) {
+    const ev = hitEvents[schedPtr++];
+    if (ev.ms < pos - 30) continue;
+    if (ev.type === "slam" || ED.opts.hitsounds)
+      AudioEng.scheduleClick(ev.type, AudioEng.msToCtxTime(ev.ms));
   }
   if (ED.opts.metronome && metNextTick !== null) {
     let guard = 0;
@@ -717,7 +728,7 @@ function scheduler() {
 function togglePlay() { ED.playing ? pausePlayback() : startPlayback(); }
 
 function startPlayback() {
-  if (!AudioEng.buffer) { toast("Load a song first (File ▸ Load Audio)"); return; }
+  if (!AudioEng.buffer) { toast("Load a song first (drag & drop an audio file)"); return; }
   finalizeLaser();
   applyVolumes();
   if (ED.curMs >= ED.domainEndMs() - 5) ED.curMs = ED.domainStartMs();
@@ -751,7 +762,7 @@ function frame() {
     if (ED.curMs >= ED.domainEndMs()) pausePlayback();
     else {
       scheduler();
-      if (ED.opts.fxPreview) FXDSP.updateLaser(laserStateNow());
+      FXDSP.updateLaser(laserStateNow());
     }
   }
   Render.draw();
@@ -837,37 +848,202 @@ const promptEdit = (label, cur, apply) => {
   markEdit();
 };
 
-function insertCommandAtCursor() {
-  const tick = Math.max(0, snapTick(ED.timing.msToTick(ED.curMs)));
-  const line = prompt(
-    "Chart command to insert at " + tickLabel(tick) +
-    "\nExamples: zoom_top=100 · zoom_bottom=-50 · zoom_side=30 · tilt=normal · tilt=1 · stop=192 · t=150\n" +
-    "(See ? → Chart events reference for what each does)");
-  if (line === null) return;
-  const s = line.trim();
-  if (!s || /^[0-2]{4}\|/.test(s)) { toast("That is not a command line"); return; }
-  const eq = s.indexOf("=");
-  const key = eq > 0 ? s.slice(0, eq) : "";
-  if (key === "beat") { toast("Use +Sig for time signatures"); return; }
-  if (key === "fx-l" || key === "fx-r" || key.startsWith("laserrange")) { toast("Use the Inspector for that"); return; }
-  pushUndo();
-  if (key === "t") {
-    const v = parseFloat(s.slice(eq + 1));
-    if (isFinite(v) && v > 0) {
-      ED.chart.bpms = ED.chart.bpms.filter(b => b.y !== tick || tick === 0);
-      if (tick === 0) ED.chart.bpms[0].v = v;
-      else { ED.chart.bpms.push({ y: tick, v }); ED.chart.bpms.sort((a, b) => a.y - b.y); }
-      rebuildTiming(); syncInputsFromChart();
-    }
-  } else if (key === "filtertype") {
-    ED.chart.filters = ED.chart.filters.filter(f => f.y !== tick);
-    ED.chart.filters.push({ y: tick, v: s.slice(eq + 1) });
-    ED.chart.filters.sort((a, b) => a.y - b.y);
-  } else {
-    ED.chart.other.push({ y: tick, s });
-    ED.chart.other.sort((a, b) => a.y - b.y);
+// time-signature change from the measure containing `tick` — measure-aligned,
+// keeping every later sig change on its measure index while the grid shifts
+function applySigChange(tick, n, dd) {
+  if (!(n >= 1) || n > 256 || !(dd >= 1) || (KSH.WHOLE_TICKS * n) % dd !== 0) {
+    toast("Unsupported signature (denominator must divide 192·n)"); return false;
   }
+  const m = KSH.measureAt(ED.measures, Math.max(0, tick));
+  pushUndo();
+  const byIdx = new Map();
+  for (const s of ED.chart.sigs) byIdx.set(KSH.measureAt(ED.measures, s.y).idx, { n: s.n, d: s.d });
+  byIdx.set(m.idx, { n, d: dd });
+  const maxIdx = Math.max(...byIdx.keys());
+  const sigs = [];
+  let t = 0, cn = 4, cd = 4;
+  for (let i = 0; i <= maxIdx; i++) {
+    const ch = byIdx.get(i);
+    if (ch && (ch.n !== cn || ch.d !== cd || i === 0)) { cn = ch.n; cd = ch.d; sigs.push({ y: t, n: cn, d: cd }); }
+    else if (ch) { cn = ch.n; cd = ch.d; }
+    t += Math.round(KSH.WHOLE_TICKS * cn / cd);
+  }
+  if (!sigs.length || sigs[0].y > 0) sigs.unshift({ y: 0, n: 4, d: 4 });
+  ED.chart.sigs = sigs;
+  rebuildTiming(); markEdit();
+  toast(`Measure ${m.idx + 1} onward: ${n}/${dd}`);
+  return true;
+}
+
+// apply one parsed command at `tick`; returns true when applied
+function applyEventCommand(tick, key, val) {
+  if (key === "t") {
+    const v = parseFloat(val);
+    if (!isFinite(v) || v <= 0) { toast("Invalid BPM"); return false; }
+    pushUndo();
+    ED.chart.bpms = ED.chart.bpms.filter(b => b.y !== tick || tick === 0);
+    if (tick === 0) ED.chart.bpms[0].v = v;
+    else { ED.chart.bpms.push({ y: tick, v }); ED.chart.bpms.sort((a, b) => a.y - b.y); }
+    rebuildTiming(); syncInputsFromChart(); markEdit();
+    return true;
+  }
+  if (key === "beat") {
+    const mm = /^(\d+)\s*\/\s*(\d+)$/.exec(String(val).trim());
+    if (!mm) { toast("Enter a signature like 7/8"); return false; }
+    return applySigChange(tick, parseInt(mm[1]), parseInt(mm[2]));
+  }
+  if (key === "filtertype") {
+    if (!val) { toast("Pick a filter type"); return false; }
+    pushUndo();
+    ED.chart.filters = ED.chart.filters.filter(f => f.y !== tick);
+    ED.chart.filters.push({ y: tick, v: val });
+    ED.chart.filters.sort((a, b) => a.y - b.y);
+    markEdit();
+    return true;
+  }
+  if (key === "fx-l" || key === "fx-r" || key.startsWith("laserrange")) {
+    toast("Use the Inspector for that"); return false;
+  }
+  pushUndo();
+  ED.chart.other.push({ y: tick, s: val === "" ? key : key + "=" + val });
+  ED.chart.other.sort((a, b) => a.y - b.y);
   markEdit();
+  return true;
+}
+
+/* ---------------- add-event dialog ---------------- */
+
+// every body command the format knows; `row` picks the value control.
+// FX effects, laser range and spins are Inspector-only; anything else
+// goes through "Custom command…" and is kept verbatim.
+const EV_KINDS = [
+  { key: "t", label: "BPM change", row: "num", vlabel: "BPM", min: 0.001, step: "0.001",
+    expl: "Tempo change from this point on.",
+    init: t => { ED.dom.inEvNum.value = KSH.fmtNum(ED.timing.bpmAt(t)); } },
+  { key: "beat", label: "Time signature", row: "sig",
+    expl: "Sets the measure length, applied from the measure containing the cursor. The denominator must divide 192·n (4/4, 7/8, 5/16, …).",
+    init: t => { const m = KSH.measureAt(ED.measures, t); ED.dom.inEvSigN.value = m.n; ED.dom.inEvSigD.value = m.d; } },
+  { key: "filtertype", label: "Laser filter", row: "choice", vlabel: "Filter",
+    expl: "Filter sound applied to the song while a laser moves: peak (wah), lpf1 (low-pass), hpf1 (high-pass), bitc (bitcrush), or a #define_filter name from the chart.",
+    init: t => {
+      fillSelect(ED.dom.selEvChoice, filterNameEntries());
+      let cur = ED.chart.meta.filtertype || "peak";
+      for (const f of ED.chart.filters) { if (f.y <= t) cur = f.v; else break; }
+      setSelectValue(ED.dom.selEvChoice, cur);
+    } },
+  { key: "zoom_top", label: "Camera pitch (zoom_top)", row: "num", vlabel: "Amount", step: "1",
+    expl: "Tips the far end of the track down (+) or up (−). The value interpolates linearly to the next zoom_top keyframe.",
+    init: () => { ED.dom.inEvNum.value = 0; } },
+  { key: "zoom_bottom", label: "Camera zoom (zoom_bottom)", row: "num", vlabel: "Amount", step: "1",
+    expl: "Pulls the camera away from the track (−) or pushes it in (+). Interpolates to the next zoom_bottom keyframe.",
+    init: () => { ED.dom.inEvNum.value = 0; } },
+  { key: "zoom_side", label: "Camera shift (zoom_side)", row: "num", vlabel: "Amount", step: "1",
+    expl: "Slides the track sideways. Interpolates to the next zoom_side keyframe.",
+    init: () => { ED.dom.inEvNum.value = 0; } },
+  { key: "tilt", label: "Tilt", row: "tilt", vlabel: "Roll",
+    expl: "Track roll. normal / bigger / biggest / zero set how strongly the lasers tilt the track; keep_* holds the current tilt. Manual roll is a number (1 ≈ −10°) that interpolates to the next numeric tilt.",
+    init: () => {
+      fillSelect(ED.dom.selEvChoice, [
+        ...["normal", "bigger", "biggest", "zero", "keep_normal", "keep_bigger", "keep_biggest"].map(k => [k, k]),
+        ["__num", "manual roll (number)…"],
+      ]);
+      ED.dom.inEvNum.value = 1;
+    } },
+  { key: "stop", label: "Stop", row: "num", vlabel: "Length", min: 1, step: "6",
+    expl: "Freezes track scrolling for N/192 of a measure (192 = one full 4/4 measure) while the music keeps playing.",
+    init: () => { ED.dom.inEvNum.value = 192; } },
+  { key: "center_split", label: "Center split", row: "num", vlabel: "Amount", step: "1",
+    expl: "Splits the track down the middle and pushes the halves apart. Interpolates between keyframes; 0 closes it again.",
+    init: () => { ED.dom.inEvNum.value = 100; } },
+  { key: "lane_toggle", label: "Lane hide", row: "num", vlabel: "Length", min: 1, step: "6",
+    expl: "Fades the track out (or back in) over N/192 of a measure.",
+    init: () => { ED.dom.inEvNum.value = 48; } },
+  { key: "fx-l_se", label: "FX chip sample (left)", row: "text", vlabel: "File",
+    expl: "Custom hit sample for left FX chips — a sample file in the song folder (e.g. clap.wav).",
+    init: () => { ED.dom.inEvText.value = ""; ED.dom.inEvText.placeholder = "clap.wav"; } },
+  { key: "fx-r_se", label: "FX chip sample (right)", row: "text", vlabel: "File",
+    expl: "Custom hit sample for right FX chips — a sample file in the song folder (e.g. clap.wav).",
+    init: () => { ED.dom.inEvText.value = ""; ED.dom.inEvText.placeholder = "clap.wav"; } },
+  { key: "", label: "Custom command…", row: "text", vlabel: "Line",
+    expl: "Any raw chart line (key=value). Known keys (t, beat, filtertype) are applied properly; unknown commands are kept in the file verbatim.",
+    init: () => { ED.dom.inEvText.value = ""; ED.dom.inEvText.placeholder = "zoom_top=100"; } },
+];
+
+function fillSelect(sel, entries) {
+  sel.innerHTML = "";
+  for (const [v, label] of entries) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = label;
+    sel.appendChild(o);
+  }
+}
+
+let evTick = 0;
+
+function openEventModal() {
+  evTick = Math.max(0, snapTick(ED.timing.msToTick(ED.curMs)));
+  ED.dom.evTitle.textContent = "Add event at " + tickLabel(evTick);
+  updateEvControls(true);
+  ED.dom.eventModal.showModal();
+}
+
+function updateEvControls(init) {
+  const d = ED.dom;
+  const kind = EV_KINDS[parseInt(d.selEvKind.value)];
+  if (init && kind.init) kind.init(evTick);
+  const num = kind.row === "num" || (kind.row === "tilt" && d.selEvChoice.value === "__num");
+  d.evRowNum.style.display = num ? "" : "none";
+  d.evRowChoice.style.display = kind.row === "choice" || kind.row === "tilt" ? "" : "none";
+  d.evRowSig.style.display = kind.row === "sig" ? "" : "none";
+  d.evRowText.style.display = kind.row === "text" ? "" : "none";
+  const vlabel = kind.vlabel || "Value";
+  d.evRowNum.firstElementChild.textContent = kind.row === "tilt" ? "Roll amount" : vlabel;
+  d.evRowChoice.firstElementChild.textContent = vlabel;
+  d.evRowText.firstElementChild.textContent = vlabel;
+  if (kind.row === "num") d.inEvNum.step = kind.step || "any";
+  d.evExplain.textContent = kind.expl;
+}
+
+function insertEventFromModal() {
+  const d = ED.dom;
+  const kind = EV_KINDS[parseInt(d.selEvKind.value)];
+  let key = kind.key, val;
+  if (kind.row === "num" || (kind.row === "tilt" && d.selEvChoice.value === "__num")) {
+    val = d.inEvNum.value.trim();
+    const nv = parseFloat(val);
+    if (!isFinite(nv)) { toast("Enter a number"); return; }
+    if (kind.min != null && nv < kind.min) { toast("Value must be at least " + kind.min); return; }
+  } else if (kind.row === "choice" || kind.row === "tilt") {
+    val = d.selEvChoice.value;
+  } else if (kind.row === "sig") {
+    val = parseInt(d.inEvSigN.value) + "/" + parseInt(d.inEvSigD.value);
+  } else {
+    val = d.inEvText.value.trim();
+    if (!val) { toast("Enter a value"); return; }
+  }
+  if (!key) { // custom raw line: route known keys through their handlers
+    if (/^[0-2]{4}\|/.test(val)) { toast("That is a note row, not a command"); return; }
+    const eq = val.indexOf("=");
+    key = eq > 0 ? val.slice(0, eq) : val;
+    val = eq > 0 ? val.slice(eq + 1) : "";
+  }
+  if (applyEventCommand(evTick, key, val)) d.eventModal.close();
+}
+
+// floating tooltip for event rows — unlike native title bubbles it is
+// unaffected by clicks and follows the cursor
+function showEvTip(text, x, y) {
+  const tip = ED.dom.evTip;
+  tip.textContent = text;
+  tip.style.display = "block";
+  const r = tip.getBoundingClientRect();
+  let tx = x - r.width - 14; // the list sits in the right sidebar: prefer left of the cursor
+  if (tx < 4) tx = Math.min(x + 14, innerWidth - r.width - 4);
+  tip.style.left = tx + "px";
+  tip.style.top = Math.max(4, Math.min(y + 12, innerHeight - r.height - 4)) + "px";
+}
+function hideEvTip() {
+  if (ED.dom.evTip) ED.dom.evTip.style.display = "none";
 }
 
 let evListKey = "";
@@ -877,6 +1053,7 @@ function renderEventList(m) {
   evListKey = key;
   const el = ED.dom.eventList;
   el.innerHTML = "";
+  hideEvTip(); // rows may vanish or change under a visible tooltip
   const inM = e => e.y >= m.y && e.y < m.y + m.ticks;
   const rows = [];
   for (const b of ED.chart.bpms) if (b.y > 0 && inM(b))
@@ -955,7 +1132,8 @@ function renderEventList(m) {
   for (const r of rows.slice(0, 24)) {
     const div = document.createElement("div");
     div.className = "evrow";
-    div.title = r.expl + "\n\nRaw: " + r.raw;
+    // custom tooltip: native title bubbles hide on click until the pointer re-enters
+    div.dataset.tip = r.expl + "\n\nRaw: " + r.raw;
     const tag = document.createElement("span");
     tag.className = "evtag";
     tag.textContent = r.tag;
@@ -1125,10 +1303,16 @@ function rebuildEffectOptions() {
     ...FX_TYPES.map(t => [t.name, t.name]),
     ...Object.entries(defs.fx).map(([n, def]) => [n, `${n} (${def.type})`]),
   ]);
-  const filterNames = new Map(FILTER_TYPES.map(n => [n, n]));
-  for (const [n, def] of Object.entries(defs.filter)) filterNames.set(n, `${n} (${def.type})`);
-  for (const f of ED.chart.filters) if (f.v && !filterNames.has(f.v)) filterNames.set(f.v, f.v);
-  fill(d.selFilter, "(keep current)", [...filterNames.entries()]);
+  fill(d.selFilter, "(keep current)", filterNameEntries(defs));
+}
+
+// [value, label] pairs of every known filter name: built-ins, #define_filter
+// lines and names already used in the chart
+function filterNameEntries(defs = parseDefines(ED.chart)) {
+  const names = new Map(FILTER_TYPES.map(n => [n, n]));
+  for (const [n, def] of Object.entries(defs.filter)) names.set(n, `${n} (${def.type})`);
+  for (const f of ED.chart.filters) if (f.v && !names.has(f.v)) names.set(f.v, f.v);
+  return [...names.entries()];
 }
 
 function applyLaserProps() {
@@ -1215,9 +1399,31 @@ function setChart(chart) {
   syncInputsFromChart(); updateTitle(); updateInspector();
 }
 
+// label/order a .ksh list entry from its difficulty + level
+function setDiffLabel(f, difficulty, level) {
+  f.diff = (difficulty || "?").trim() || "?";
+  f.order = DIFFICULTIES.indexOf(f.diff);
+  if (f.order < 0) f.order = 9;
+  f.label = `${f.diff}${level ? " Lv" + String(level).trim() : ""} — ${f.name}`;
+}
+
+// refill the .ksh dropdown from ED.kshFiles + the "new file" action
+function rebuildDiffOptions() {
+  const sel = ED.dom.selDiff;
+  sel.innerHTML = "";
+  ED.kshFiles.forEach((f, i) => {
+    const o = document.createElement("option");
+    o.value = i; o.textContent = f.label;
+    sel.appendChild(o);
+  });
+  const o = document.createElement("option");
+  o.value = "new"; o.textContent = "＋ New .ksh…";
+  sel.appendChild(o);
+}
+
 async function openFolder() {
   if (!window.showDirectoryPicker) {
-    toast("Folder access needs Chrome/Edge. Use “Open .ksh” + “Load Audio” instead.");
+    toast("Folder access needs Chrome/Edge. Drag & drop the .ksh and audio files instead.");
     return;
   }
   let dir;
@@ -1230,18 +1436,55 @@ async function openFolder() {
   for (const f of files) {
     const text = await (await f.handle.getFile()).text();
     const dm = /^difficulty=(.*)$/m.exec(text), lm = /^level=(.*)$/m.exec(text);
-    const diff = dm ? dm[1].trim() : "?";
-    f.label = `${diff}${lm ? " Lv" + lm[1].trim() : ""} — ${f.name}`;
-    f.order = DIFFICULTIES.indexOf(diff);
-    if (f.order < 0) f.order = 9;
+    setDiffLabel(f, dm ? dm[1] : "?", lm ? lm[1] : "");
   }
   files.sort((a, b) => a.order - b.order);
   ED.kshFiles = files;
-  const sel = ED.dom.selDiff;
-  sel.innerHTML = "";
-  files.forEach((f, i) => { const o = document.createElement("option"); o.value = i; o.textContent = f.label; sel.appendChild(o); });
-  sel.style.display = "";
+  rebuildDiffOptions();
+  ED.dom.selDiff.style.display = "";
   await loadKshEntry(files[0]);
+}
+
+// "+ New .ksh…" picked in the dropdown: create a fresh difficulty in the folder
+async function addKshToFolder() {
+  const revert = () => {
+    const i = ED.kshFiles.findIndex(x => x.handle === ED.kshHandle);
+    ED.dom.selDiff.value = i >= 0 ? i : 0;
+  };
+  if (ED.dirty && !confirm("Discard unsaved changes?")) { revert(); return; }
+  const freeDiff = DIFFICULTIES.find(x => !ED.kshFiles.some(f => f.diff === x)) || "light";
+  let name = prompt("File name for the new .ksh:", freeDiff + ".ksh");
+  if (name === null || !(name = name.trim())) { revert(); return; }
+  if (!name.toLowerCase().endsWith(".ksh")) name += ".ksh";
+  if (ED.kshFiles.some(f => f.name.toLowerCase() === name.toLowerCase())) {
+    toast(`“${name}” already exists in this folder`); revert(); return;
+  }
+  // the new difficulty shares the song's metadata (incl. #define lines) and timing
+  const src = ED.chart;
+  const c = KSH.newChart();
+  c.meta = Object.assign({}, src.meta);
+  c.metaKeys = src.metaKeys.slice();
+  c.meta.difficulty = freeDiff;
+  c.meta.level = "1";
+  c.bpms = structuredClone(src.bpms);
+  c.sigs = structuredClone(src.sigs);
+  let handle;
+  try {
+    handle = await ED.dirHandle.getFileHandle(name, { create: true });
+    const w = await handle.createWritable();
+    await w.write(KSH.serialize(c));
+    await w.close();
+  } catch (e) { toast("Could not create " + name); revert(); return; }
+  const f = { name, handle };
+  setDiffLabel(f, c.meta.difficulty, c.meta.level);
+  ED.kshFiles.push(f);
+  ED.kshFiles.sort((a, b) => a.order - b.order);
+  setChart(c);
+  ED.kshHandle = handle; ED.kshName = name;
+  rebuildDiffOptions();
+  ED.dom.selDiff.value = ED.kshFiles.indexOf(f);
+  toast("Created " + name);
+  openSetup(false);
 }
 
 async function loadKshEntry(f) {
@@ -1265,7 +1508,7 @@ async function loadKshEntry(f) {
       await AudioEng.loadArrayBuffer(ab, m);
       rebuildMeasures(); ED.chartVersion++;
       toast(`Loaded ${f.name} + ${m}`);
-    } catch (e) { toast(`Audio “${m}” not found in folder — use Load Audio`); }
+    } catch (e) { toast(`Audio “${m}” not found in folder — drag & drop the audio file`); }
   }
   updateTitle();
 }
@@ -1278,14 +1521,16 @@ async function openKshFile(file) {
   ED.dom.selDiff.style.display = "none";
   hideLaunch();
   const m = (ED.chart.meta.m || "").split(";")[0].trim();
-  if (m && AudioEng.fileName !== m) toast(`Chart wants “${m}” — click Load Audio to pick it`);
+  if (m && AudioEng.fileName !== m) toast(`Chart wants “${m}” — drag & drop it to load`);
   updateTitle();
 }
 
 async function loadAudioFile(file) {
   try {
     const ab = await file.arrayBuffer();
+    const raw = new Uint8Array(ab.slice(0)); // decodeAudioData detaches ab
     await AudioEng.loadArrayBuffer(ab, file.name);
+    ED.audioRaw = { name: file.name, data: raw }; // kept for "Save folder as .zip" without a folder
     if (!ED.chart.meta.m) { ED.chart.meta.m = file.name; ED.dirty = true; }
     rebuildMeasures(); ED.chartVersion++;
     toast(`Audio loaded: ${file.name} (${fmtTime(AudioEng.durationMs())})`);
@@ -1303,6 +1548,7 @@ async function saveChart() {
       const w = await ED.kshHandle.createWritable();
       await w.write(text); await w.close();
       ED.dirty = false; updateTitle();
+      refreshDiffLabel();
       toast("Saved " + ED.kshName);
       return;
     } catch (e) { toast("Save failed — downloading instead"); }
@@ -1317,9 +1563,43 @@ async function saveChart() {
   ED.dirty = false; updateTitle();
 }
 
-function newChart() {
-  // nothing is created yet — the chart is only replaced when Create is pressed
-  openSetup(true);
+// keep the current entry's dropdown label in sync with the saved difficulty/level
+function refreshDiffLabel() {
+  const f = ED.kshFiles.find(x => x.handle === ED.kshHandle);
+  if (!f) return;
+  setDiffLabel(f, ED.chart.meta.difficulty, ED.chart.meta.level);
+  ED.kshFiles.sort((a, b) => a.order - b.order);
+  rebuildDiffOptions();
+  ED.dom.selDiff.value = ED.kshFiles.indexOf(f);
+}
+
+async function collectFolderEntries(dir, prefix, out, skipName) {
+  for await (const [name, h] of dir.entries()) {
+    if (h.kind === "directory") await collectFolderEntries(h, prefix + name + "/", out, skipName);
+    else if (prefix + name !== skipName)
+      out.push({ name: prefix + name, data: new Uint8Array(await (await h.getFile()).arrayBuffer()) });
+  }
+}
+
+// download the whole song folder (with the current chart freshly serialized)
+// as a zip; without a folder, falls back to chart + loaded audio
+async function saveZipArchive() {
+  finalizeLaser();
+  const text = KSH.serialize(ED.chart);
+  const kshName = ED.kshName || ((ED.chart.meta.title || "chart") + ".ksh");
+  const entries = [];
+  try {
+    if (ED.dirHandle) await collectFolderEntries(ED.dirHandle, "", entries, kshName);
+    else if (ED.audioRaw) entries.push({ name: ED.audioRaw.name, data: ED.audioRaw.data });
+  } catch (e) { toast("Could not read the folder — zip not saved"); return; }
+  entries.push({ name: kshName, data: new TextEncoder().encode(text) });
+  const zipName = ((ED.dirHandle && ED.dirHandle.name) || ED.chart.meta.title || "chart") + ".zip";
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(ZIP.make(entries));
+  a.download = zipName;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast(`Downloaded ${zipName} (${entries.length} file${entries.length > 1 ? "s" : ""})`);
 }
 
 /* --------------------------- setup page --------------------------- */
@@ -1327,6 +1607,7 @@ function newChart() {
 let setupIsNew = false;
 
 function setupOpen() { return ED.dom.setupScreen.style.display !== "none"; }
+function prefsOpen() { return ED.dom.prefsScreen.style.display !== "none"; }
 
 function openSetup(isNew = false) {
   setupIsNew = isNew;
@@ -1476,16 +1757,19 @@ function $(id) { return document.getElementById(id); }
 
 function init() {
   const d = ED.dom;
-  for (const id of ["highway", "gameview", "highwayWrap", "inLaneSpeed", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
+  for (const id of ["highway", "gameview", "highwayWrap", "inLaneSpeed", "inGameSpeed", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
     "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
-    "chkMetronome", "chkHitsounds", "chkWaveform", "chkFxPreview",
+    "chkMetronome", "chkHitsounds",
     "inspNone", "inspNote", "inspNoteInfo", "inspMulti", "inspMultiInfo", "fxEffectBox", "selFxType", "inFxParam",
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
-    "spinBox", "selSpin", "inSpinLen", "curveBox", "selCurve", "btnCurve", "eventList", "btnAddEvent",
-    "btnOpenFolder", "btnOpenKsh", "btnLoadAudio", "btnNew", "btnSave", "btnHelp", "btnInsBpm", "btnInsSig", "btnInsCmd", "selView",
+    "spinBox", "selSpin", "inSpinLen", "curveBox", "selCurve", "btnCurve", "eventList", "btnAddEvent", "evTip",
+    "eventModal", "evTitle", "selEvKind", "evRowNum", "inEvNum", "evRowChoice", "selEvChoice",
+    "evRowSig", "inEvSigN", "inEvSigD", "evRowText", "inEvText", "evExplain", "btnEvInsert", "btnEvCancel",
+    "btnSave", "saveWrap", "saveMenu", "btnSaveKsh", "btnSaveZip", "btnHelp", "selView",
     "fileKsh", "fileAudio", "helpModal",
     "launchScreen", "btnLaunchFolder", "btnLaunchNew",
     "setupScreen", "setupTitle", "btnSetup", "btnSetupDone", "btnSetupCancel",
+    "prefsScreen", "btnPrefs", "btnPrefsClose",
     "sBpm", "sOffset", "btnTapPad", "tapCount", "tapBpm", "tapOffset",
     "btnTapReset", "btnTapUseBpm", "btnTapUseBoth",
     "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic"])
@@ -1509,14 +1793,13 @@ function init() {
   d.selRate.value = AudioEng.rate;
 
   // reflect restored preferences in the UI
-  d.inLaneSpeed.value = Math.round(ED.hispeed * 100) / 100;
+  d.inLaneSpeed.value = Math.round(ED.edSpeed * 100) / 100;
+  d.inGameSpeed.value = Math.round(ED.hispeed * 100) / 100;
   d.inVolMusic.value = ED.volMusic;
   d.inVolHit.value = ED.volHit;
   d.inVolMet.value = ED.volMet;
   d.chkMetronome.checked = ED.opts.metronome;
   d.chkHitsounds.checked = ED.opts.hitsounds;
-  d.chkWaveform.checked = ED.opts.waveform;
-  d.chkFxPreview.checked = ED.opts.fxPreview;
   setViewMode(ED.viewMode);
   for (const [v, label] of SPIN_TYPES) {
     const o = document.createElement("option"); o.value = v; o.textContent = label;
@@ -1559,10 +1842,11 @@ function init() {
 
   // view modes + game view input
   d.selView.addEventListener("change", () => setViewMode(d.selView.value));
-  d.inLaneSpeed.addEventListener("change", () => setLaneSpeed(parseFloat(d.inLaneSpeed.value)));
+  d.inLaneSpeed.addEventListener("change", () => setEditorSpeed(parseFloat(d.inLaneSpeed.value)));
+  d.inGameSpeed.addEventListener("change", () => setGameSpeed(parseFloat(d.inGameSpeed.value)));
   d.gameview.addEventListener("wheel", e => {
     e.preventDefault();
-    if (e.ctrlKey) setLaneSpeed(ED.hispeed * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+    if (e.ctrlKey) setGameSpeed(ED.hispeed * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
     else seekBySnap(e.deltaY < 0 ? 1 : -1);
   }, { passive: false });
 
@@ -1579,60 +1863,30 @@ function init() {
   d.selSnap.addEventListener("change", () => { ED.snapDiv = parseInt(d.selSnap.value); savePrefs(); });
   d.chkMetronome.addEventListener("change", () => { ED.opts.metronome = d.chkMetronome.checked; if (ED.playing) resetSched(); savePrefs(); });
   d.chkHitsounds.addEventListener("change", () => { ED.opts.hitsounds = d.chkHitsounds.checked; savePrefs(); });
-  d.chkWaveform.addEventListener("change", () => { ED.opts.waveform = d.chkWaveform.checked; savePrefs(); });
-  d.chkFxPreview.addEventListener("change", () => {
-    ED.opts.fxPreview = d.chkFxPreview.checked;
-    if (!ED.opts.fxPreview) FXDSP.updateLaser(null);
-    if (ED.playing) resetSched();
-    savePrefs();
+
+  // add-event dialog
+  EV_KINDS.forEach((k, i) => {
+    const o = document.createElement("option");
+    o.value = i; o.textContent = k.label;
+    d.selEvKind.appendChild(o);
+  });
+  d.btnAddEvent.addEventListener("click", openEventModal);
+  d.selEvKind.addEventListener("change", () => updateEvControls(true));
+  d.selEvChoice.addEventListener("change", () => updateEvControls(false));
+  d.btnEvInsert.addEventListener("click", insertEventFromModal);
+  d.btnEvCancel.addEventListener("click", () => d.eventModal.close());
+  d.eventModal.addEventListener("keydown", e => {
+    if (e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); insertEventFromModal(); }
   });
 
-  // timing inputs
-  d.btnInsBpm.addEventListener("click", () => {
-    const tick = snapTick(ED.timing.msToTick(ED.curMs));
-    const cur = ED.timing.bpmAt(Math.max(0, tick));
-    const val = prompt(`BPM change at ${tickLabel(Math.max(0, tick))}:`, KSH.fmtNum(cur));
-    if (val === null) return;
-    const v = parseFloat(val);
-    if (!isFinite(v) || v <= 0) { toast("Invalid BPM"); return; }
-    pushUndo();
-    ED.chart.bpms = ED.chart.bpms.filter(b => b.y !== tick || tick === 0);
-    if (tick === 0) ED.chart.bpms[0].v = v;
-    else { ED.chart.bpms.push({ y: tick, v }); ED.chart.bpms.sort((a, b) => a.y - b.y); }
-    rebuildTiming(); markEdit(); syncInputsFromChart();
+  // event-row tooltips (the ✎/× buttons keep their own native titles)
+  d.eventList.addEventListener("mousemove", e => {
+    const row = e.target.closest(".evrow");
+    if (row && row.dataset.tip && !e.target.closest("button"))
+      showEvTip(row.dataset.tip, e.clientX, e.clientY);
+    else hideEvTip();
   });
-  d.btnInsSig.addEventListener("click", () => {
-    const tick = ED.timing.msToTick(ED.curMs);
-    const m = KSH.measureAt(ED.measures, Math.max(0, tick));
-    const val = prompt(`Time signature from measure ${m.idx + 1}:`, m.n + "/" + m.d);
-    if (val === null) return;
-    const mm = /^(\d+)\s*\/\s*(\d+)$/.exec(val.trim());
-    if (!mm) { toast("Enter a signature like 4/4 or 7/8"); return; }
-    const n = parseInt(mm[1]), dd = parseInt(mm[2]);
-    if (n < 1 || n > 256 || dd < 1 || (KSH.WHOLE_TICKS * n) % dd !== 0) {
-      toast("Unsupported signature (denominator must divide 192·n)"); return;
-    }
-    pushUndo();
-    // preserve each sig change's measure INDEX while the grid shifts
-    const byIdx = new Map();
-    for (const s of ED.chart.sigs) byIdx.set(KSH.measureAt(ED.measures, s.y).idx, { n: s.n, d: s.d });
-    byIdx.set(m.idx, { n, d: dd });
-    const maxIdx = Math.max(...byIdx.keys());
-    const sigs = [];
-    let t = 0, cn = 4, cd = 4;
-    for (let i = 0; i <= maxIdx; i++) {
-      const ch = byIdx.get(i);
-      if (ch && (ch.n !== cn || ch.d !== cd || i === 0)) { cn = ch.n; cd = ch.d; sigs.push({ y: t, n: cn, d: cd }); }
-      else if (ch) { cn = ch.n; cd = ch.d; }
-      t += Math.round(KSH.WHOLE_TICKS * cn / cd);
-    }
-    if (!sigs.length || sigs[0].y > 0) sigs.unshift({ y: 0, n: 4, d: 4 });
-    ED.chart.sigs = sigs;
-    rebuildTiming(); markEdit();
-    toast(`Measure ${m.idx + 1} onward: ${n}/${dd}`);
-  });
-  d.btnInsCmd.addEventListener("click", insertCommandAtCursor);
-  d.btnAddEvent.addEventListener("click", insertCommandAtCursor);
+  d.eventList.addEventListener("mouseleave", hideEvTip);
 
   // inspector
   d.selFxType.addEventListener("change", applyFxEffect);
@@ -1644,11 +1898,8 @@ function init() {
   d.btnCurve.addEventListener("click", curveToNextPoint);
   d.btnDelSel.addEventListener("click", deleteSelection);
 
-  // files
-  d.btnOpenFolder.addEventListener("click", openFolder);
-  d.btnOpenKsh.addEventListener("click", () => d.fileKsh.click());
+  // files (hidden inputs: used by the launch screen, tests and drag & drop fallback)
   d.fileKsh.addEventListener("change", () => { if (d.fileKsh.files[0]) openKshFile(d.fileKsh.files[0]); d.fileKsh.value = ""; });
-  d.btnLoadAudio.addEventListener("click", () => d.fileAudio.click());
   d.fileAudio.addEventListener("change", async () => {
     const file = d.fileAudio.files[0];
     d.fileAudio.value = "";
@@ -1677,9 +1928,22 @@ function init() {
     launchNewPending = true;
     d.fileAudio.click();
   });
-  d.btnNew.addEventListener("click", newChart);
-  d.btnSave.addEventListener("click", saveChart);
-  d.selDiff.addEventListener("change", () => loadKshEntry(ED.kshFiles[parseInt(d.selDiff.value)]));
+  // save dropdown
+  const hideSaveMenu = () => { d.saveMenu.style.display = "none"; };
+  d.btnSave.addEventListener("click", e => {
+    e.stopPropagation();
+    d.saveMenu.style.display = d.saveMenu.style.display === "none" ? "" : "none";
+  });
+  d.btnSaveKsh.addEventListener("click", () => { hideSaveMenu(); saveChart(); });
+  d.btnSaveZip.addEventListener("click", () => { hideSaveMenu(); saveZipArchive(); });
+  document.addEventListener("click", e => { if (!d.saveWrap.contains(e.target)) hideSaveMenu(); });
+  d.selDiff.addEventListener("change", () => {
+    if (d.selDiff.value === "new") addKshToFolder();
+    else loadKshEntry(ED.kshFiles[parseInt(d.selDiff.value)]);
+  });
+  // preferences page (all controls in it apply live)
+  d.btnPrefs.addEventListener("click", () => { d.prefsScreen.style.display = ""; });
+  d.btnPrefsClose.addEventListener("click", () => { d.prefsScreen.style.display = "none"; });
   // setup page (metadata + timing + tap tool)
   d.btnSetup.addEventListener("click", () => openSetup(false));
   d.btnSetupDone.addEventListener("click", applySetup);
@@ -1728,6 +1992,11 @@ function onKeyDown(e) {
     else if (e.key.toLowerCase() === "t") { e.preventDefault(); tapNow(); }
     else if (e.key === "Escape") closeSetup();
     else if (e.key === "Enter") applySetup();
+    return;
+  }
+  if (prefsOpen()) {
+    if (e.key === " ") { e.preventDefault(); togglePlay(); }
+    else if (e.key === "Escape" || e.key === "Enter") ED.dom.prefsScreen.style.display = "none";
     return;
   }
   const ctrl = e.ctrlKey || e.metaKey;

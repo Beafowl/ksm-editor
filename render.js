@@ -88,7 +88,7 @@ function drawHighway() {
   const tMin = G.tickOfY(H) - 1, tMax = G.tickOfY(0) + 1;
 
   // ---- waveform strip (left of track) ----
-  if (ED.opts.waveform && AudioEng.peaks) {
+  if (AudioEng.peaks) {
     const wfW = 60, wfX = trackX - gutter - wfW - 16;
     if (wfX > 2) {
       ctx.fillStyle = "rgba(96,140,200,0.05)";
