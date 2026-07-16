@@ -168,20 +168,34 @@ function setSegWide(seg, wide) {
       : Math.round(Math.max(0, Math.min(1, p.v * 2 - 0.5)) * 50) / 50;
 }
 
-function hitTest(x, y) {
+// cycle=true (selection clicks): when the nearest laser point is already
+// selected, return the next point stacked under the cursor instead — that is
+// what makes overlapping points (slam ends, clustered points at low lane
+// speed) individually selectable by clicking again.
+function hitTest(x, y, cycle = false) {
   const G = ED.G || Render.geom();
   const c = ED.chart;
   const tol = 8 / G.ppt;
   const tickRaw = G.tickOfY(y);
   const rel = (x - G.trackX) / G.trackW;
-  // laser points
+  // laser points: gather every candidate under the cursor, nearest first
+  const cands = [];
   for (let s = 0; s < 2; s++)
     for (const seg of c.lasers[s])
       for (let i = 0; i < seg.points.length; i++) {
         const p = seg.points[i];
-        if (Math.abs(G.laserX(p.v, seg.wide) - x) <= 8 && Math.abs(G.yOfTick(p.y) - y) <= 8)
-          return { type: "laserpoint", side: s, seg, pt: i };
+        const dx = G.laserX(p.v, seg.wide) - x, dy = G.yOfTick(p.y) - y;
+        if (Math.abs(dx) <= 8 && Math.abs(dy) <= 8)
+          cands.push({ d: dx * dx + dy * dy, hit: { type: "laserpoint", side: s, seg, pt: i } });
       }
+  if (cands.length) {
+    cands.sort((a, b) => a.d - b.d);
+    if (cycle && cands.length > 1) {
+      const unsel = cands.find(cd => !ED.selList.some(s => sameSel(s, cd.hit)));
+      if (unsel && ED.selList.some(s => sameSel(s, cands[0].hit))) return unsel.hit;
+    }
+    return cands[0].hit;
+  }
   if (rel >= 0 && rel < 1) {
     const lane = Math.max(0, Math.min(3, Math.floor(rel * 4)));
     const side = rel < 0.5 ? 0 : 1;
@@ -240,9 +254,10 @@ function removeSeg(side, seg) {
 
 function finalizeLaser() {
   if (!ED.laserEdit) return;
-  const { side, seg } = ED.laserEdit;
+  const { side, seg, basePts = 0 } = ED.laserEdit;
   ED.laserEdit = null;
   if (seg.points.length < 2) { removeSeg(side, seg); markEdit(); return; }
+  if (basePts > 0 && seg.points.length === basePts) return; // resumed laser, nothing added
   seg.points.sort((a, b) => a.y - b.y);
   const first = seg.points[0].y, last = seg.points[seg.points.length - 1].y;
   const arr = ED.chart.lasers[side];
@@ -291,6 +306,18 @@ function onHighwayDown(e) {
     const side = ED.tool === "laserL" ? 0 : 1;
     if (!h.inWide || h.tick < 0) return;
     if (!ED.laserEdit) {
+      // clicking the end point of an existing laser continues that laser —
+      // starting a new one there would overlap and replace it on finalize
+      const G = ED.G || Render.geom();
+      const resume = c.lasers[side].find(s => {
+        const p = s.points[s.points.length - 1];
+        return Math.abs(G.laserX(p.v, s.wide) - x) <= 10 && Math.abs(G.yOfTick(p.y) - y) <= 10;
+      });
+      if (resume) {
+        pushUndo();
+        ED.laserEdit = { side, seg: resume, basePts: resume.points.length };
+        return;
+      }
       pushUndo();
       const seg = { points: [], wide: relOutside(h.rel) ? 2 : 1 };
       seg.points.push({ y: h.tick, v: laserVFrom(h.rel, seg.wide) });
@@ -309,7 +336,7 @@ function onHighwayDown(e) {
     }
     markEdit();
   } else if (ED.tool === "select") {
-    const hit = hitTest(x, y);
+    const hit = hitTest(x, y, true); // cycle through stacked laser points
     const add = e.shiftKey;
     const wasInGroup = hit && ED.selList.some(s => sameSel(s, hit));
     setSel(hit, add);
@@ -352,10 +379,13 @@ function onHighwayDown(e) {
 function onRightClick(x, y) {
   if (ED.playing) return;
   if (ED.laserEdit) {
-    // right-click while drawing a laser: remove last point / cancel
-    const seg = ED.laserEdit.seg;
-    seg.points.pop();
-    if (!seg.points.length) { removeSeg(ED.laserEdit.side, seg); ED.laserEdit = null; }
+    // right-click while drawing a laser: remove last point / cancel.
+    // On a resumed laser only the added points are removable — never the
+    // points the laser already had.
+    const { side, seg, basePts = 0 } = ED.laserEdit;
+    if (seg.points.length > basePts) seg.points.pop();
+    if (!seg.points.length) { removeSeg(side, seg); ED.laserEdit = null; }
+    else if (seg.points.length <= basePts) ED.laserEdit = null; // back to the original laser
     markEdit();
     return;
   }
@@ -1187,6 +1217,7 @@ function updateInspector() {
     }
     d.inspMultiInfo.textContent = ED.selList.length + " selected: " +
       Object.entries(counts).map(([k, n]) => `${n} ${k}${n > 1 ? "s" : ""}`).join(", ");
+    d.splineBox.style.display = splineSelectable() ? "" : "none";
     // batch effect editing when every selected object is an FX hold
     const allFxHolds = ED.selList.every(s => s.type === "fx" && s.note.l > 0);
     d.fxEffectBox.style.display = allFxHolds ? "" : "none";
@@ -1228,9 +1259,6 @@ function updateInspector() {
     const f = ED.chart.filters.find(f => f.y === pts[0].y);
     setSelectValue(d.selFilter, f ? f.v : "");
     d.spinBox.style.display = sel.type === "laserpoint" ? "" : "none";
-    d.curveBox.style.display =
-      sel.type === "laserpoint" && sel.pt + 1 < pts.length &&
-      pts[sel.pt + 1].y - pts[sel.pt].y > KSH.SLAM_TICKS ? "" : "none";
     if (sel.type === "laserpoint") {
       const sp = ED.chart.spins.find(s => s.y === pts[sel.pt].y);
       const m = sp && /^(@\(|@\)|@<|@>|S<|S>)\s*(\d*)/.exec(sp.s);
@@ -1329,35 +1357,99 @@ function applyLaserProps() {
 
 /* ------------------------- laser curving ------------------------- */
 
-const CURVE_SHAPES = {
-  easein: t => t * t,
-  easeout: t => 1 - (1 - t) * (1 - t),
-  smooth: t => (1 - Math.cos(Math.PI * t)) / 2,
-};
+// minimum spacing between generated points: one tick above the slam threshold
+const SPLINE_GAP = KSH.SLAM_TICKS + 1;
 
-// replace the straight span between point i and i+1 with an eased curve
-function curveToNextPoint() {
-  const sel = ED.sel;
-  if (!sel || sel.type !== "laserpoint") return;
-  const seg = sel.seg, i = sel.pt;
-  if (i + 1 >= seg.points.length) { toast("This is the laser's last point"); return; }
-  const a = seg.points[i], b = seg.points[i + 1];
-  const dy = b.y - a.y;
-  if (dy <= KSH.SLAM_TICKS) { toast("That span is a slam — nothing to curve"); return; }
-  const shape = CURVE_SHAPES[ED.dom.selCurve.value] || CURVE_SHAPES.smooth;
-  // subdivide at the snap grid (at least 1/32 notes, at most ~100 points)
-  let step = Math.max(6, Math.min(ED.snapTicks(), 48), Math.ceil(dy / 100 / 3) * 3);
-  const newPts = [];
-  let lastV = a.v;
-  for (let y = a.y + step; y <= b.y - step / 2; y += step) {
-    const v = Math.round((a.v + (b.v - a.v) * shape((y - a.y) / dy)) * 50) / 50;
-    if (v !== lastV) { newPts.push({ y, v }); lastV = v; }
+// selected laser points grouped by segment: Map<seg, Set<pt>> with only the
+// segments that have 2+ selected points; null when the selection doesn't qualify
+function splineGroups() {
+  if (!ED.selList.length || !ED.selList.every(s => s.type === "laserpoint")) return null;
+  const bySeg = new Map();
+  for (const s of ED.selList) {
+    if (!bySeg.has(s.seg)) bySeg.set(s.seg, new Set());
+    bySeg.get(s.seg).add(s.pt);
   }
-  if (!newPts.length) { toast("Span too short to curve at this snap"); return; }
+  for (const [seg, pts] of bySeg) if (pts.size < 2) bySeg.delete(seg);
+  return bySeg.size ? bySeg : null;
+}
+
+function splineSelectable() { return !!splineGroups(); }
+
+// replace one segment's laser between the selected knots with a monotone cubic
+// spline (d3 curveMonotoneX tangents: rounded direction changes, no overshoot,
+// so the curve can't hit the 0..1 clamp and produce corners). Density is the
+// maximum that never creates a slam. Returns the new point count of the range.
+function splineSeg(seg, idxs) {
+  const knots = idxs.map(i => seg.points[i]);
+  const n = knots.length;
+  const h = [], sl = []; // span length + slope
+  for (let i = 0; i + 1 < n; i++) {
+    h[i] = Math.max(1, knots[i + 1].y - knots[i].y);
+    sl[i] = (knots[i + 1].v - knots[i].v) / h[i];
+  }
+  const tan = new Array(n);
+  for (let i = 1; i + 1 < n; i++) {
+    const s0 = sl[i - 1], s1 = sl[i];
+    const p = (s0 * h[i] + s1 * h[i - 1]) / (h[i - 1] + h[i]);
+    tan[i] = (Math.sign(s0) + Math.sign(s1)) * Math.min(Math.abs(s0), Math.abs(s1), 0.5 * Math.abs(p)) || 0;
+  }
+  tan[0] = n > 2 ? (3 * sl[0] - tan[1]) / 2 : sl[0];
+  tan[n - 1] = n > 2 ? (3 * sl[n - 2] - tan[n - 2]) / 2 : sl[n - 2];
+  const out = [];
+  for (let i = 0; i + 1 < n; i++) {
+    const a = knots[i], b = knots[i + 1];
+    out.push({ y: a.y, v: a.v });
+    const span = b.y - a.y;
+    if (span <= KSH.SLAM_TICKS) continue; // slams between knots stay slams
+    // as many points as fit with every gap >= SPLINE_GAP (spans of less than
+    // 2*SPLINE_GAP ticks can't take a point without creating a slam)
+    const nPts = Math.floor(span / SPLINE_GAP) - 1;
+    if (nPts < 1) continue;
+    const g = Math.floor(span / (nPts + 1));
+    let r = span - g * (nPts + 1); // spread the remainder over the first gaps
+    const bq = Math.round(Math.max(0, Math.min(1, b.v)) * 50) / 50;
+    let y = a.y, lastV = a.v;
+    for (let j = 0; j < nPts; j++) {
+      y += g + (r-- > 0 ? 1 : 0);
+      const t = (y - a.y) / span, t2 = t * t, t3 = t2 * t;
+      let v = (2 * t3 - 3 * t2 + 1) * a.v + (t3 - 2 * t2 + t) * span * tan[i]
+            + (-2 * t3 + 3 * t2) * b.v + (t3 - t2) * span * tan[i + 1];
+      v = Math.round(Math.max(0, Math.min(1, v)) * 50) / 50;
+      // spans are monotone: samples already at the target knot's grid value
+      // would only flatten the approach — let the line run into the knot instead
+      if (v !== lastV && v !== bq) { out.push({ y, v }); lastV = v; }
+    }
+  }
+  out.push({ y: knots[n - 1].y, v: knots[n - 1].v });
+  const start = idxs[0], count = idxs[idxs.length - 1] - idxs[0] + 1;
+  const old = seg.points.slice(start, start + count);
+  const changed = out.length !== old.length || out.some((p, i) => p.y !== old[i].y || p.v !== old[i].v);
+  if (changed) seg.points.splice(start, count, ...out);
+  return { changed, count: out.length };
+}
+
+// spline every laser that has 2+ selected points (one undo step for all)
+function splineSelection() {
+  const groups = splineGroups();
+  if (!groups) { toast("Shift+click 2+ points of a laser first"); return; }
   pushUndo();
-  seg.points.splice(i + 1, 0, ...newPts);
-  markEdit(); updateInspector();
-  toast(`Curved with ${newPts.length} points`);
+  let total = 0, changed = false;
+  for (const [seg, ptSet] of groups) {
+    const r = splineSeg(seg, [...ptSet].sort((a, b) => a - b));
+    total += r.count;
+    changed = changed || r.changed;
+  }
+  if (!changed) {
+    // e.g. every span is under 2*SPLINE_GAP ticks: no curve point fits anywhere
+    ED.undoStack.pop();
+    toast(`Nothing to curve — the selected points are too close (a span needs ${2 * SPLINE_GAP}+ ticks to take a curve point without creating a slam)`);
+    return; // keep the selection so it can be adjusted
+  }
+  setSel(null);
+  markEdit();
+  toast(groups.size > 1
+    ? `Splined ${groups.size} lasers (${total} points total)`
+    : `Spline through ${[...groups.values()][0].size} points (${total} points total)`);
 }
 
 /* ---------------------------- file I/O ---------------------------- */
@@ -1762,7 +1854,7 @@ function init() {
     "chkMetronome", "chkHitsounds",
     "inspNone", "inspNote", "inspNoteInfo", "inspMulti", "inspMultiInfo", "fxEffectBox", "selFxType", "inFxParam",
     "inspLaser", "inspLaserInfo", "chkSegWide", "selFilter", "btnDelSel",
-    "spinBox", "selSpin", "inSpinLen", "curveBox", "selCurve", "btnCurve", "eventList", "btnAddEvent", "evTip",
+    "spinBox", "selSpin", "inSpinLen", "splineBox", "btnSpline", "eventList", "btnAddEvent", "evTip",
     "eventModal", "evTitle", "selEvKind", "evRowNum", "inEvNum", "evRowChoice", "selEvChoice",
     "evRowSig", "inEvSigN", "inEvSigD", "evRowText", "inEvText", "evExplain", "btnEvInsert", "btnEvCancel",
     "btnSave", "saveWrap", "saveMenu", "btnSaveKsh", "btnSaveZip", "btnHelp", "selView",
@@ -1895,7 +1987,7 @@ function init() {
   d.selFilter.addEventListener("change", applyLaserProps);
   d.selSpin.addEventListener("change", applySpin);
   d.inSpinLen.addEventListener("change", applySpin);
-  d.btnCurve.addEventListener("click", curveToNextPoint);
+  d.btnSpline.addEventListener("click", splineSelection);
   d.btnDelSel.addEventListener("click", deleteSelection);
 
   // files (hidden inputs: used by the launch screen, tests and drag & drop fallback)
@@ -1944,6 +2036,19 @@ function init() {
   // preferences page (all controls in it apply live)
   d.btnPrefs.addEventListener("click", () => { d.prefsScreen.style.display = ""; });
   d.btnPrefsClose.addEventListener("click", () => { d.prefsScreen.style.display = "none"; });
+
+  // clicking outside a modal closes it (mousedown, so releasing a drag that
+  // started inside — e.g. on a slider — doesn't count as an outside click)
+  const closeOnBackdrop = (el, close) =>
+    el.addEventListener("mousedown", e => { if (e.target === el) close(); });
+  closeOnBackdrop(d.setupScreen, closeSetup);
+  closeOnBackdrop(d.prefsScreen, () => { d.prefsScreen.style.display = "none"; });
+  for (const dlg of [d.eventModal, d.helpModal])
+    dlg.addEventListener("mousedown", e => {
+      const r = dlg.getBoundingClientRect(); // backdrop clicks land outside the rect
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)
+        dlg.close();
+    });
   // setup page (metadata + timing + tap tool)
   d.btnSetup.addEventListener("click", () => openSetup(false));
   d.btnSetupDone.addEventListener("click", applySetup);

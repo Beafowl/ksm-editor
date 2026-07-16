@@ -78,6 +78,9 @@
         Right-click deletes. Drag hold tail to resize.</div>
       <div id="inspMulti" style="display:none">
         <div id="inspMultiInfo" class="info"></div>
+        <div id="splineBox" style="display:none">
+          <button id="btnSpline" title="Replace the lasers between the selected points with smooth curves passing through every selected point">〜 Spline through points</button>
+        </div>
         <div class="hint">Shift+click toggles · drag moves all · <kbd>Del</kbd> deletes all</div>
       </div>
       <div id="inspNote" style="display:none">
@@ -96,14 +99,6 @@
           <label class="row"><span>Spin</span><select id="selSpin"></select></label>
           <label class="row"><span>Length</span><input id="inSpinLen" type="number" min="6" step="6" style="width:64px"></label>
           <div class="hint">Lane spin at this laser point (place on a slam).</div>
-        </div>
-        <div id="curveBox" style="display:none">
-          <label class="row"><span>Curve</span><select id="selCurve">
-            <option value="smooth">Smooth (S-curve)</option>
-            <option value="easein">Ease in (slow start)</option>
-            <option value="easeout">Ease out (fast start)</option>
-          </select></label>
-          <button id="btnCurve">Curve to next point</button>
         </div>
       </div>
       <button id="btnDelSel" class="danger">Delete selection <kbd>Del</kbd></button>
@@ -231,10 +226,10 @@
       <h4>Placing objects</h4>
       <ul>
         <li><b>BT / FX tool:</b> click a lane = chip · click-drag upward = hold · click an existing chip = remove it.</li>
-        <li><b>Laser tools:</b> each click adds a point. Click on the <i>same row</i> = slam. <kbd>Enter</kbd>/<kbd>Esc</kbd>/double-click finishes the laser, right-click removes the last point. Placing or dragging a point <b>outside the track</b> automatically makes the laser 2× wide (laserrange).</li>
-        <li><b>Curving:</b> select a laser point → pick a shape (smooth / ease in / ease out) → <b>Curve to next point</b> subdivides the span into an eased curve.</li>
+        <li><b>Laser tools:</b> each click adds a point. Click on the <i>same row</i> = slam. Clicking the <b>end point of an existing laser</b> continues that laser. <kbd>Enter</kbd>/<kbd>Esc</kbd>/double-click finishes the laser, right-click removes the last point. Placing or dragging a point <b>outside the track</b> automatically makes the laser 2× wide (laserrange).</li>
+        <li><b>Curving:</b> Select tool → <b>Shift+click</b> two or more points per laser (several lasers at once work too) → <b>〜 Spline through points</b> replaces each laser between its selected points with a smooth curve through them. Density is automatic — as dense as possible without creating slams, so spans narrower than 14 ticks stay straight.</li>
         <li><b>Right-click</b> (any tool) deletes what's under the cursor.</li>
-        <li><b>Select tool:</b> drag notes to move, drag a hold's tail to resize, drag laser points freely. <b>Shift+click</b> selects multiple objects — drag moves them together, <kbd>Del</kbd> deletes all, and picking an effect applies to every selected FX hold.</li>
+        <li><b>Select tool:</b> drag notes to move, drag a hold's tail to resize, drag laser points freely. <b>Shift+click</b> selects multiple objects — drag moves them together, <kbd>Del</kbd> deletes all, and picking an effect applies to every selected FX hold. When laser points overlap, clicking the same spot again picks the next stacked point.</li>
       </ul>
       <h4>Effects &amp; events</h4>
       <ul>
