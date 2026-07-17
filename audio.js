@@ -200,9 +200,10 @@ const AudioEng = {
   scheduleClick(type, ctxTime) {
     if (!this.ctx) return;
     const src = this.ctx.createBufferSource();
-    // bt/fx always use the synthesized tick — the skin's claps/clicks sound pitched
+    // bt/fx assist ticks use USC's real metronome tick (from metronome120.wav);
+    // the synthesized tick stays as a fallback while samples decode
     src.buffer = (type === "bt" || type === "fx")
-      ? this._clickBuf(type)
+      ? this._samples.tick || this._clickBuf(type)
       : this._samples[type] || this._clickBuf(type);
     src.connect(type === "methi" || type === "metlo" ? this.metGain : this.clickGain);
     src.start(Math.max(ctxTime, this.ctx.currentTime));

@@ -4,8 +4,8 @@
 const fs = require("fs");
 const path = require("path");
 
-const SRC = "c:/Users/Berkb/Desktop/Neuer Ordner/unnamed-sdvx-clone/bin/skins/Default/audio";
-const OUT = "c:/Users/Berkb/Desktop/Neuer Ordner/ksm-editor/sounds.js";
+const SRC = path.join(__dirname, "../../unnamed-sdvx-clone/bin/skins/Default/audio");
+const OUT = path.join(__dirname, "../sounds.js");
 
 const MAP = {
   bt: "clap.wav",
@@ -14,6 +14,9 @@ const MAP = {
   methi: "click-01.wav",
   metlo: "click-02.wav",
 };
+// the assist tick is one plain (non-accented) tick cut out of USC's calibration
+// metronome loop — see scratch script extract_tick.js / the entry in sounds.js
+const TICK_SRC = path.join(__dirname, "../../unnamed-sdvx-clone/bin/audio/metronome120.wav");
 
 function parseWav(buf) {
   if (buf.toString("ascii", 0, 4) !== "RIFF" || buf.toString("ascii", 8, 12) !== "WAVE")
@@ -71,10 +74,38 @@ function convert(file, maxSec) {
   return out;
 }
 
+// one plain tick (the 2nd, non-accented one) from the 120 BPM metronome loop
+function extractTick() {
+  const { fmt, data } = parseWav(fs.readFileSync(TICK_SRC));
+  const frames = data.length / 2;
+  const mono = new Float32Array(frames);
+  for (let i = 0; i < frames; i++) mono[i] = data.readInt16LE(i * 2) / 32768;
+  const onset = Math.round(fmt.rate * 0.5005) - Math.round(fmt.rate * 0.003);
+  const win = mono.slice(onset, onset + Math.round(fmt.rate * 0.12));
+  let peak = 0;
+  for (const v of win) peak = Math.max(peak, Math.abs(v));
+  let s1 = win.length - 1;
+  while (s1 > 0 && Math.abs(win[s1]) < peak * 0.004) s1--;
+  s1 = Math.min(win.length - 1, s1 + Math.round(fmt.rate * 0.01));
+  const tick = win.slice(0, s1 + 1);
+  const fade = Math.round(fmt.rate * 0.005);
+  for (let i = 0; i < fade; i++) tick[tick.length - fade + i] *= 1 - i / fade;
+  const g = 0.89 / peak;
+  const out = Buffer.alloc(44 + tick.length * 2);
+  out.write("RIFF", 0); out.writeUInt32LE(36 + tick.length * 2, 4); out.write("WAVE", 8);
+  out.write("fmt ", 12); out.writeUInt32LE(16, 16); out.writeUInt16LE(1, 20); out.writeUInt16LE(1, 22);
+  out.writeUInt32LE(fmt.rate, 24); out.writeUInt32LE(fmt.rate * 2, 28); out.writeUInt16LE(2, 32); out.writeUInt16LE(16, 34);
+  out.write("data", 36); out.writeUInt32LE(tick.length * 2, 40);
+  for (let i = 0; i < tick.length; i++)
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(tick[i] * g * 32767))), 44 + i * 2);
+  return out;
+}
+
 let js = `"use strict";
 /* USC default-skin sounds (unnamed-sdvx-clone, MIT license), converted to
  * mono 16-bit WAV and embedded as base64 so they load from file:// URLs.
- * bt/fx = clap / clap_punchy, slam = laser_slam, methi/metlo = click-01/02. */
+ * bt/fx = clap / clap_punchy, slam = laser_slam, methi/metlo = click-01/02,
+ * tick = one plain tick from USC's metronome120.wav (the assist tick). */
 const GAME_SOUNDS = {
 `;
 for (const [key, file] of Object.entries(MAP)) {
@@ -82,6 +113,9 @@ for (const [key, file] of Object.entries(MAP)) {
   js += `  ${key}: "${wav.toString("base64")}",\n`;
   console.log(`${key} <- ${file}: ${wav.length} bytes (${Math.round(wav.length / 44100 / 2 * 1000)}ms)`);
 }
+const tickWav = extractTick();
+js += `  tick: "${tickWav.toString("base64")}",\n`;
+console.log(`tick <- metronome120.wav: ${tickWav.length} bytes`);
 js += "};\n";
 fs.writeFileSync(OUT, js);
 console.log("wrote", OUT, Math.round(js.length / 1024) + "KB");

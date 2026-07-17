@@ -335,6 +335,13 @@ function onHighwayDown(e) {
       pts.push({ y: py, v });
     }
     markEdit();
+  } else if (ED.tool === "remove") {
+    const hit = hitTest(x, y);
+    if (!hit) return;
+    pushUndo();
+    deleteObject(hit);
+    pruneSel();
+    markEdit(); updateInspector();
   } else if (ED.tool === "select") {
     const hit = hitTest(x, y, true); // cycle through stacked laser points
     const add = e.shiftKey;
@@ -527,7 +534,9 @@ function seekToMs(ms) {
 function setViewMode(mode) {
   ED.viewMode = mode;
   ED.dom.highwayWrap.className = "view-" + mode;
-  ED.dom.selView.value = mode;
+  ED.dom.btnView.textContent = "View: " + mode[0].toUpperCase() + mode.slice(1) + " ▾";
+  ED.dom.viewMenu.querySelectorAll("button").forEach(b =>
+    b.classList.toggle("active", b.dataset.view === mode));
   savePrefs();
 }
 
@@ -994,6 +1003,9 @@ const EV_KINDS = [
   { key: "fx-r_se", label: "FX chip sample (right)", row: "text", vlabel: "File",
     expl: "Custom hit sample for right FX chips — a sample file in the song folder (e.g. clap.wav).",
     init: () => { ED.dom.inEvText.value = ""; ED.dom.inEvText.placeholder = "clap.wav"; } },
+  { key: "bm", label: "Bookmark", row: "text", vlabel: "Name", optional: true,
+    expl: "Editor bookmark at the cursor — jump between bookmarks with , and . (the B key toggles one directly). Saved as a //bm: comment in the file, ignored by the game.",
+    init: () => { ED.dom.inEvText.value = ""; ED.dom.inEvText.placeholder = "(optional name)"; } },
   { key: "", label: "Custom command…", row: "text", vlabel: "Line",
     expl: "Any raw chart line (key=value). Known keys (t, beat, filtertype) are applied properly; unknown commands are kept in the file verbatim.",
     init: () => { ED.dom.inEvText.value = ""; ED.dom.inEvText.placeholder = "zoom_top=100"; } },
@@ -1049,7 +1061,17 @@ function insertEventFromModal() {
     val = parseInt(d.inEvSigN.value) + "/" + parseInt(d.inEvSigD.value);
   } else {
     val = d.inEvText.value.trim();
-    if (!val) { toast("Enter a value"); return; }
+    if (!val && !kind.optional) { toast("Enter a value"); return; }
+  }
+  if (key === "bm") { // bookmark: //bm: comment line, one per tick
+    pushUndo();
+    ED.chart.other = ED.chart.other.filter(o => !(o.y === evTick && isBookmark(o)));
+    ED.chart.other.push({ y: evTick, s: "//bm:" + val });
+    ED.chart.other.sort((a, b) => a.y - b.y);
+    markEdit();
+    d.eventModal.close();
+    toast("Bookmark at " + tickLabel(evTick) + " — jump with , and .");
+    return;
   }
   if (!key) { // custom raw line: route known keys through their handlers
     if (/^[0-2]{4}\|/.test(val)) { toast("That is a note row, not a command"); return; }
@@ -1464,9 +1486,6 @@ function toast(msg, ms = 3000) {
 
 function updateTitle() {
   const m = ED.chart.meta;
-  ED.dom.songTitle.textContent =
-    (m.title || "(untitled)") + (m.artist ? " — " + m.artist : "") +
-    `  [${m.difficulty || "?"} ${m.level || ""}]` + (ED.dirty ? " ●" : "");
   document.title = (ED.dirty ? "● " : "") + (m.title || "KSM Editor") + " – KSM Chart Editor";
 }
 
@@ -1655,6 +1674,29 @@ async function saveChart() {
   ED.dirty = false; updateTitle();
 }
 
+// export the chart as .kson (KSM v2): into the folder when one is open,
+// otherwise as a download. The .ksh stays the file being edited.
+async function saveKson() {
+  finalizeLaser();
+  const text = JSON.stringify(KSON.fromChart(ED.chart), null, 2);
+  const name = (ED.kshName || (ED.chart.meta.title || "chart") + ".ksh").replace(/\.ksh$/i, "") + ".kson";
+  if (ED.dirHandle) {
+    try {
+      const fh = await ED.dirHandle.getFileHandle(name, { create: true });
+      const w = await fh.createWritable();
+      await w.write(text); await w.close();
+      toast("Saved " + name);
+      return;
+    } catch (e) { /* fall through to download */ }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Downloaded " + name);
+}
+
 // keep the current entry's dropdown label in sync with the saved difficulty/level
 function refreshDiffLabel() {
   const f = ED.kshFiles.find(x => x.handle === ED.kshHandle);
@@ -1714,6 +1756,9 @@ function openSetup(isNew = false) {
   d.mDifficulty.value = DIFFICULTIES.includes(m.difficulty) ? m.difficulty : "light";
   d.mLevel.value = m.level || "1"; d.mMvol.value = m.mvol || "75";
   d.mMusic.value = m.m || "";
+  const po = Math.max(0, Math.round(parseFloat(m.po) || 0));
+  d.mPo.value = po;
+  d.mPreviewEnd.value = po + Math.max(0, Math.round(parseFloat(m.plength) || 15000));
   d.sBpm.value = KSH.fmtNum(src.bpms[0].v);
   d.sOffset.value = Math.round(parseFloat(m.o) || 0);
   tapReset();
@@ -1739,6 +1784,12 @@ function applySetup() {
   m.effect = d.mEffect.value; m.jacket = d.mJacket.value;
   m.difficulty = d.mDifficulty.value; m.level = d.mLevel.value;
   m.mvol = d.mMvol.value; m.m = d.mMusic.value;
+  // the file stores a length; the UI edits start + end
+  const po = Math.max(0, Math.round(parseFloat(d.mPo.value) || 0));
+  const pEnd = Math.max(0, Math.round(parseFloat(d.mPreviewEnd.value) || 0));
+  m.po = String(po);
+  if (pEnd > po) m.plength = String(pEnd - po);
+  else { m.plength = "15000"; toast("Preview end was not after the start — length set to 15 s"); }
   m.o = String(off);
   chart.bpms[0].v = bpm;
   if (setupIsNew) {
@@ -1849,7 +1900,7 @@ function $(id) { return document.getElementById(id); }
 
 function init() {
   const d = ED.dom;
-  for (const id of ["highway", "gameview", "highwayWrap", "inLaneSpeed", "inGameSpeed", "timeline", "btnPlay", "timeDisp", "beatDisp", "songTitle", "toast",
+  for (const id of ["highway", "gameview", "highwayWrap", "inLaneSpeed", "inGameSpeed", "timeline", "btnPlay", "timeDisp", "beatDisp", "toast",
     "selSnap", "selRate", "inVolMusic", "inVolHit", "inVolMet", "selDiff",
     "chkMetronome", "chkHitsounds",
     "inspNone", "inspNote", "inspNoteInfo", "inspMulti", "inspMultiInfo", "fxEffectBox", "selFxType", "inFxParam",
@@ -1857,14 +1908,16 @@ function init() {
     "spinBox", "selSpin", "inSpinLen", "splineBox", "btnSpline", "eventList", "btnAddEvent", "evTip",
     "eventModal", "evTitle", "selEvKind", "evRowNum", "inEvNum", "evRowChoice", "selEvChoice",
     "evRowSig", "inEvSigN", "inEvSigD", "evRowText", "inEvText", "evExplain", "btnEvInsert", "btnEvCancel",
-    "btnSave", "saveWrap", "saveMenu", "btnSaveKsh", "btnSaveZip", "btnHelp", "selView",
+    "btnSave", "saveWrap", "saveMenu", "btnFileNew", "btnFileOpenFolder", "btnSaveKsh", "btnSaveKson", "btnSaveZip",
+    "btnHelp", "btnView", "viewWrap", "viewMenu",
     "fileKsh", "fileAudio", "helpModal",
     "launchScreen", "btnLaunchFolder", "btnLaunchNew",
     "setupScreen", "setupTitle", "btnSetup", "btnSetupDone", "btnSetupCancel",
     "prefsScreen", "btnPrefs", "btnPrefsClose",
     "sBpm", "sOffset", "btnTapPad", "tapCount", "tapBpm", "tapOffset",
     "btnTapReset", "btnTapUseBpm", "btnTapUseBoth",
-    "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic"])
+    "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
+    "mPo", "mPreviewEnd", "btnPreviewCursor", "btnPreviewEndCursor"])
     d[id] = $(id);
 
   loadPrefs();
@@ -1933,7 +1986,6 @@ function init() {
   });
 
   // view modes + game view input
-  d.selView.addEventListener("change", () => setViewMode(d.selView.value));
   d.inLaneSpeed.addEventListener("change", () => setEditorSpeed(parseFloat(d.inLaneSpeed.value)));
   d.inGameSpeed.addEventListener("change", () => setGameSpeed(parseFloat(d.inGameSpeed.value)));
   d.gameview.addEventListener("wheel", e => {
@@ -2020,15 +2072,39 @@ function init() {
     launchNewPending = true;
     d.fileAudio.click();
   });
-  // save dropdown
+  // File and View dropdown menus
   const hideSaveMenu = () => { d.saveMenu.style.display = "none"; };
+  const hideViewMenu = () => { d.viewMenu.style.display = "none"; };
   d.btnSave.addEventListener("click", e => {
     e.stopPropagation();
+    hideViewMenu();
     d.saveMenu.style.display = d.saveMenu.style.display === "none" ? "" : "none";
   });
+  d.btnView.addEventListener("click", e => {
+    e.stopPropagation();
+    hideSaveMenu();
+    d.viewMenu.style.display = d.viewMenu.style.display === "none" ? "" : "none";
+  });
+  d.viewMenu.querySelectorAll("button").forEach(b =>
+    b.addEventListener("click", () => { hideViewMenu(); setViewMode(b.dataset.view); }));
+  d.btnFileNew.addEventListener("click", () => {
+    hideSaveMenu();
+    if (ED.dirty && !confirm("Discard unsaved changes and start a new chart?")) return;
+    launchNewPending = true; // same flow as the launch screen: pick audio, then setup
+    d.fileAudio.click();
+  });
+  d.btnFileOpenFolder.addEventListener("click", async () => {
+    hideSaveMenu();
+    await openFolder();
+    if (ED.kshFiles.length) hideLaunch();
+  });
   d.btnSaveKsh.addEventListener("click", () => { hideSaveMenu(); saveChart(); });
+  d.btnSaveKson.addEventListener("click", () => { hideSaveMenu(); saveKson(); });
   d.btnSaveZip.addEventListener("click", () => { hideSaveMenu(); saveZipArchive(); });
-  document.addEventListener("click", e => { if (!d.saveWrap.contains(e.target)) hideSaveMenu(); });
+  document.addEventListener("click", e => {
+    if (!d.saveWrap.contains(e.target)) hideSaveMenu();
+    if (!d.viewWrap.contains(e.target)) hideViewMenu();
+  });
   d.selDiff.addEventListener("change", () => {
     if (d.selDiff.value === "new") addKshToFolder();
     else loadKshEntry(ED.kshFiles[parseInt(d.selDiff.value)]);
@@ -2053,12 +2129,32 @@ function init() {
   d.btnSetup.addEventListener("click", () => openSetup(false));
   d.btnSetupDone.addEventListener("click", applySetup);
   d.btnSetupCancel.addEventListener("click", closeSetup);
+  // playback keeps running while setup is open, so grab the live position
+  const setupCursorMs = () => Math.max(0, Math.round(ED.playing ? AudioEng.positionMs() : ED.curMs));
+  d.btnPreviewCursor.addEventListener("click", () => {
+    const ms = setupCursorMs();
+    const oldLen = (parseFloat(d.mPreviewEnd.value) || 0) - (parseFloat(d.mPo.value) || 0);
+    d.mPo.value = ms;
+    d.mPreviewEnd.value = ms + (oldLen > 0 ? Math.round(oldLen) : 15000); // keep the length until an end is picked
+    toast(`Preview start set to ${fmtTime(ms)} — Done applies it`);
+  });
+  d.btnPreviewEndCursor.addEventListener("click", () => {
+    const ms = setupCursorMs();
+    d.mPreviewEnd.value = ms;
+    const po = parseFloat(d.mPo.value) || 0;
+    toast(ms > po
+      ? `Preview end set to ${fmtTime(ms)} (${fmtTime(ms - po)} long) — Done applies it`
+      : "Preview end set — note: it is before the start");
+  });
   d.btnTapPad.addEventListener("click", tapNow);
   d.btnTapReset.addEventListener("click", tapReset);
   d.btnTapUseBpm.addEventListener("click", () => useTap(false));
   d.btnTapUseBoth.addEventListener("click", () => useTap(true));
   d.sOffset.addEventListener("change", updateTapUI);
-  d.btnHelp.addEventListener("click", () => d.helpModal.showModal());
+  d.btnHelp.addEventListener("click", () => {
+    d.helpModal.showModal();
+    d.helpModal.scrollTop = 0; // showModal focuses the Close button at the bottom, which scrolls the dialog
+  });
 
   // drag & drop
   window.addEventListener("dragover", e => e.preventDefault());
@@ -2128,6 +2224,7 @@ function onKeyDown(e) {
     case "3": setTool("fx"); break;
     case "4": setTool("laserL"); break;
     case "5": setTool("laserR"); break;
+    case "6": setTool("remove"); break;
     case "t": case "T":
       e.preventDefault();
       openSetup(false);

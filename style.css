@@ -83,13 +83,15 @@ kbd {
 #topbar .group { display: flex; align-items: center; gap: 6px; }
 #topbar .group.right { margin-left: auto; }
 #topbar label { display: flex; align-items: center; gap: 4px; color: var(--dim); }
-#songTitle {
-  font-weight: 600;
-  color: #fff;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 34vw;
+#topbar { position: relative; }
+.menusep { border: none; border-top: 1px solid var(--border); margin: 4px 2px; }
+.savemenu button.active { color: var(--accent2); }
+#selDiff { /* exact page-center regardless of the side clusters' widths */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 40vw;
 }
 .savewrap { position: relative; }
 .savemenu {
