@@ -2096,7 +2096,7 @@ function init() {
     "prefsScreen", "btnPrefs", "btnPrefsClose",
     "btnGenerate", "genModal", "genLevel", "genBpm", "genMeasures", "genGuidance",
     "genRange", "genBmRow", "genBmFrom", "genBmTo", "genMeasuresRow", "genAudioG", "btnGenCancel",
-    "chkGenAudio", "genModelFile", "genStatus", "btnGenGo", "btnGenClose",
+    "chkGenAudio", "genStatus", "btnGenGo", "btnGenClose",
     "genS_notes", "genV_notes", "genS_peak", "genV_peak", "genS_tsumami", "genV_tsumami",
     "genS_tricky", "genV_tricky", "genS_hand-trip", "genV_hand-trip", "genS_one-hand", "genV_one-hand",
     "sBpm", "sOffset", "btnTapPad", "tapCount", "tapBpm", "tapOffset",

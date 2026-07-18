@@ -318,33 +318,6 @@ function loadOrt() {
   return ortReady;
 }
 
-const IDB = {
-  open() {
-    return new Promise((res, rej) => {
-      const rq = indexedDB.open("ksmgen", 1);
-      rq.onupgradeneeded = () => rq.result.createObjectStore("files");
-      rq.onsuccess = () => res(rq.result);
-      rq.onerror = () => rej(rq.error);
-    });
-  },
-  async get(key) {
-    const db = await this.open();
-    return new Promise((res, rej) => {
-      const rq = db.transaction("files").objectStore("files").get(key);
-      rq.onsuccess = () => res(rq.result || null);
-      rq.onerror = () => rej(rq.error);
-    });
-  },
-  async put(key, val) {
-    const db = await this.open();
-    return new Promise((res, rej) => {
-      const rq = db.transaction("files", "readwrite").objectStore("files").put(val, key);
-      rq.onsuccess = () => res();
-      rq.onerror = () => rej(rq.error);
-    });
-  },
-};
-
 let session = null, sessionEp = "";
 async function ensureSession(modelBytes) {
   if (session) return session;
@@ -361,8 +334,9 @@ async function ensureSession(modelBytes) {
 
 /* ------------------------ generation loop ------------------------ */
 
-function sampleTopP(logits, temperature, topP) {
+function sampleTopP(logits, temperature, topP, banned) {
   const V = logits.length;
+  for (const t of banned) logits[t] = -1e9;
   let mx = -Infinity;
   for (let i = 0; i < V; i++) mx = Math.max(mx, logits[i]);
   const probs = new Float64Array(V);
@@ -384,10 +358,72 @@ function sampleTopP(logits, temperature, topP) {
   return idx[cut - 1];
 }
 
+/* ---- playability / grammar state for constrained sampling ---- */
+
+function newGenState() {
+  return { btOpen: [false, false, false, false], fxOpen: [false, false],
+           laOpen: [false, false], laPts: [0, 0], tickNotes: 0 };
+}
+
+function stateStep(st, t) {
+  const name = VOCAB[t] || "";
+  if (name === "bar" || name.startsWith("d_")) st.tickNotes = 0;
+  else if (name.startsWith("bt_chip_")) st.tickNotes++;
+  else if (name.startsWith("bt_on_")) { st.btOpen[+name.slice(-1)] = true; st.tickNotes++; }
+  else if (name.startsWith("bt_off_")) st.btOpen[+name.slice(-1)] = false;
+  else if (name.startsWith("fx_chip_")) st.tickNotes++;
+  else if (name.startsWith("fx_on_")) { st.fxOpen[+name.slice(-1)] = true; st.tickNotes++; }
+  else if (name.startsWith("fx_off_")) st.fxOpen[+name.slice(-1)] = false;
+  else if (name.startsWith("la_on_")) { const s = +name.slice(-1); st.laOpen[s] = true; st.laPts[s] = 0; }
+  else if (name.startsWith("la_v_")) st.laPts[+name.split("_")[2]]++;
+  else if (name.startsWith("la_off_")) st.laOpen[+name.slice(-1)] = false;
+}
+
+// which hand a lane belongs to: left = BT A/B + FX-L, right = BT C/D + FX-R
+const ZONE = [
+  ["bt_chip_0", "bt_on_0", "bt_chip_1", "bt_on_1", "fx_chip_0", "fx_on_0"],
+  ["bt_chip_2", "bt_on_2", "bt_chip_3", "bt_on_3", "fx_chip_1", "fx_on_1"],
+];
+const ALL_NOTE_STARTS = ZONE[0].concat(ZONE[1]);
+
+function tokenMask(st, rangeMode, pos, stopPos) {
+  const banned = new Set([PAD, BOS]);
+  if (rangeMode) { banned.add(EOS); banned.add(TID.bpmch); }
+  else if (pos < stopPos * 0.75) banned.add(EOS);
+  for (let l = 0; l < 4; l++) {
+    if (st.btOpen[l]) { banned.add(TID["bt_on_" + l]); banned.add(TID["bt_chip_" + l]); }
+    else banned.add(TID["bt_off_" + l]);
+  }
+  for (let s = 0; s < 2; s++) {
+    if (st.fxOpen[s]) { banned.add(TID["fx_on_" + s]); banned.add(TID["fx_chip_" + s]); }
+    else banned.add(TID["fx_off_" + s]);
+    if (st.laOpen[s]) {
+      banned.add(TID["la_on_" + s]);
+      if (st.laPts[s] > 0) banned.add(TID["la_wide_" + s]); // wide only right after on
+      if (st.laPts[s] < 2) banned.add(TID["la_off_" + s]);  // segments need 2+ points
+    } else {
+      banned.add(TID["la_off_" + s]);
+      banned.add(TID["la_wide_" + s]);
+      for (let v = 0; v <= 50; v++) banned.add(TID["la_v_" + s + "_" + v]);
+    }
+  }
+  // playability: an active laser occupies that hand -> no notes in its zone;
+  // chord size (incl. held holds) capped at 4 / 2 with one laser / 0 with both
+  for (let s = 0; s < 2; s++)
+    if (st.laOpen[s]) for (const n of ZONE[s]) banned.add(TID[n]);
+  const held = st.btOpen.filter(Boolean).length + st.fxOpen.filter(Boolean).length;
+  const cap = st.laOpen[0] && st.laOpen[1] ? 0 : (st.laOpen[0] || st.laOpen[1] ? 2 : 4);
+  if (st.tickNotes + held >= cap)
+    for (const n of ALL_NOTE_STARTS) banned.add(TID[n]);
+  return banned;
+}
+
 /* opts: {level, radar, bpm, guidance, audioGuidance, onsets|null,
           context: {tokens, ticks} | null, startPos, stopPos, maxTokens,
           cancelled, onProgress}
-   -> {tokens, startPos} | null on cancel */
+   Generation is chunked: when the context window fills up, the session is
+   re-primed with the conditioning plus the most recent tokens, so any
+   range length works. -> {tokens} | null on cancel */
 async function generate(opts) {
   const F = featsPerCell(), A = MC.audio_dim;
   const NL = MC.n_layer, NH = MC.n_head, HD = MC.head_dim;
@@ -395,6 +431,7 @@ async function generate(opts) {
   const B = haveAudio ? 3 : 2; // rows: cond+audio, uncond-radar, [cond no-audio]
   const cond = [BOS, ...condTokens(opts.level, opts.radar, opts.bpm)];
   const uncond = [BOS, cond[1], UNCOND, UNCOND, UNCOND, UNCOND, UNCOND, UNCOND, cond[8]];
+  const CHUNK_TAIL = 900; // recent tokens carried over when re-priming
 
   const window_ = pos => {
     const w = new Float32Array(A);
@@ -405,16 +442,7 @@ async function generate(opts) {
     return w;
   };
 
-  const ctxTokens = opts.context ? opts.context.tokens : [];
-  const ctxTicks = opts.context ? opts.context.ticks : [];
-  const prompt = cond.concat(ctxTokens);
-  const promptTicks = new Array(PREFIX_LEN).fill(opts.startPos && !opts.context ? 0 : 0)
-    .concat(ctxTicks);
-  const S0 = prompt.length;
-
   let past = [];
-  for (let i = 0; i < 2 * NL; i++)
-    past.push(new ort.Tensor("float32", new Float32Array(0), [B, NH, 0, HD]));
   const runStep = async (idsPerRow, audioF, mask, S, P) => {
     const flat = [];
     for (const row of idsPerRow) flat.push(...row);
@@ -435,27 +463,44 @@ async function generate(opts) {
     return out;
   };
 
-  // prefill
-  const preMask = new Float32Array(B * S0 * S0);
-  for (let b = 0; b < B; b++)
-    for (let i = 0; i < S0; i++)
-      for (let j = 0; j < S0; j++)
-        preMask[(b * S0 + i) * S0 + j] = j <= i ? 0 : -1e9;
-  const preAudio = new Float32Array(B * S0 * A);
-  for (let i = 0; i < S0; i++) {
-    const w = window_(promptTicks[i] || 0);
+  const prefill = async (tailTokens, tailTicks) => {
+    past = [];
+    for (let i = 0; i < 2 * NL; i++)
+      past.push(new ort.Tensor("float32", new Float32Array(0), [B, NH, 0, HD]));
+    const rowsC = cond.concat(tailTokens);
+    const rowsU = uncond.concat(tailTokens);
+    const S0 = rowsC.length;
+    const mask = new Float32Array(B * S0 * S0);
     for (let b = 0; b < B; b++)
-      if (!(haveAudio && b === 2)) preAudio.set(w, (b * S0 + i) * A);
-  }
-  const promptUncond = uncond.concat(ctxTokens);
-  const rows0 = haveAudio ? [prompt, promptUncond, prompt] : [prompt, promptUncond];
-  let out = await runStep(rows0, preAudio, preMask, S0, 0);
+      for (let i = 0; i < S0; i++)
+        for (let j = 0; j < S0; j++)
+          mask[(b * S0 + i) * S0 + j] = j <= i ? 0 : -1e9;
+    const audio = new Float32Array(B * S0 * A);
+    for (let i = 0; i < S0; i++) {
+      const w = window_(i < PREFIX_LEN ? 0 : tailTicks[i - PREFIX_LEN]);
+      for (let b = 0; b < B; b++)
+        if (!(haveAudio && b === 2)) audio.set(w, (b * S0 + i) * A);
+    }
+    const rows = haveAudio ? [rowsC, rowsU, rowsC] : [rowsC, rowsU];
+    const out = await runStep(rows, audio, mask, S0, 0);
+    return { out, S0 };
+  };
 
-  const body = [];
-  let pos = opts.startPos, P = S0;
+  const ctxTokens = opts.context ? opts.context.tokens : [];
+  const ctxTicks = opts.context ? opts.context.ticks : [];
+  const st = newGenState();
+  for (const t of ctxTokens) stateStep(st, t); // seed holds/lasers crossing the boundary
+  st.tickNotes = 0;
+
+  let { out, S0 } = await prefill(ctxTokens, ctxTicks);
+  let P = S0;
+  const body = [], bodyTicks = [];
+  let pos = opts.startPos;
   const V = VOCAB.length;
   const gr = opts.guidance, ga = opts.audioGuidance;
-  const maxTok = Math.min(opts.maxTokens || 6000, MC.ctx - S0 - 1);
+  const maxTok = opts.maxTokens || 20000;
+  const rangeMode = !!opts.context;
+
   while (body.length < maxTok && pos < opts.stopPos) {
     const lg = out.logits.data;
     const S = out.logits.dims[1];
@@ -466,16 +511,25 @@ async function generate(opts) {
       if (haveAudio) x += (ga - 1) * (lg[off(0) + i] - lg[off(2) + i]);
       mixed[i] = x;
     }
-    const t = sampleTopP(mixed, 0.95, 0.95);
+    const t = sampleTopP(mixed, 0.95, 0.95, tokenMask(st, rangeMode, pos, opts.stopPos));
     if (t === EOS) break;
-    if (t !== PAD && t !== BOS) {
-      body.push(t);
-      const name = VOCAB[t];
-      if (name === "bar") pos = (Math.floor(pos / MEASURE) + 1) * MEASURE;
-      else if (name.startsWith("d_")) pos += parseInt(name.slice(2));
-    }
+    body.push(t);
+    stateStep(st, t);
+    const name = VOCAB[t];
+    if (name === "bar") pos = (Math.floor(pos / MEASURE) + 1) * MEASURE;
+    else if (name.startsWith("d_")) pos += parseInt(name.slice(2));
+    bodyTicks.push(pos);
     if (opts.cancelled()) return null;
     if (opts.onProgress && body.length % 25 === 0) opts.onProgress(body.length, pos);
+
+    if (P + 1 >= MC.ctx - 4) {
+      // window full: re-prime with conditioning + the most recent tokens
+      const all = ctxTokens.concat(body), allTicks = ctxTicks.concat(bodyTicks);
+      const tail = all.slice(-CHUNK_TAIL), tailTicks = allTicks.slice(-CHUNK_TAIL);
+      ({ out, S0 } = await prefill(tail, tailTicks));
+      P = S0;
+      continue;
+    }
     const w = window_(pos);
     const stepAudio = new Float32Array(B * A);
     for (let b = 0; b < B; b++)
@@ -538,16 +592,9 @@ async function open() {
   if (!modelBytes) {
     updateStatus("loading model ...");
     if (await tryEmbeddedModel()) {
-      updateStatus(`model ready (embedded, ${(modelBytes.byteLength / 1e6).toFixed(0)} MB)`);
+      updateStatus(`model ready (${(modelBytes.byteLength / 1e6).toFixed(0)} MB)`);
     } else {
-      const cached = await IDB.get("model").catch(() => null);
-      if (cached) {
-        modelBytes = cached.bytes;
-        if (cached.meta) MC = Object.assign(MC, cached.meta);
-        updateStatus(`model ready (cached, ${(modelBytes.byteLength / 1e6).toFixed(0)} MB)`);
-      } else {
-        updateStatus("no model found — pick chartgen.onnx (and its .json) below");
-      }
+      updateStatus("model files missing from the editor build (model/chartgen-model.js)");
     }
   } else {
     updateStatus(`model ready (${(modelBytes.byteLength / 1e6).toFixed(0)} MB)`);
@@ -562,26 +609,6 @@ function updateRangeUI() {
 }
 
 function updateStatus(msg) { ED.dom.genStatus.textContent = msg; }
-
-async function pickModel(files) {
-  let bytes = null, meta = null;
-  for (const f of files) {
-    if (f.name.endsWith(".onnx")) bytes = await f.arrayBuffer();
-    else if (f.name.endsWith(".json")) {
-      const j = JSON.parse(await f.text());
-      meta = {
-        n_layer: j.n_layer, n_head: j.n_head, head_dim: j.head_dim,
-        audio_dim: j.model_cfg.audio_dim, ctx: j.model_cfg.ctx,
-      };
-    }
-  }
-  if (!bytes) { updateStatus("that was not a .onnx file"); return; }
-  modelBytes = bytes;
-  if (meta) MC = Object.assign(MC, meta);
-  session = null;
-  await IDB.put("model", { bytes, meta }).catch(() => {});
-  updateStatus(`model ready (${(bytes.byteLength / 1e6).toFixed(0)} MB) — cached for next time`);
-}
 
 function setRunning(on) {
   const d = ED.dom;
@@ -640,8 +667,8 @@ async function go() {
     const t0 = performance.now();
     const res = await generate({
       level, radar, bpm,
-      guidance: parseFloat(d.genGuidance.value) || 2,
-      audioGuidance: parseFloat(d.genAudioG.value) || 2.5,
+      guidance: Math.max(1, Math.min(3, parseFloat(d.genGuidance.value) || 2)),
+      audioGuidance: Math.max(1, Math.min(3, parseFloat(d.genAudioG.value) || 2.5)),
       onsets, context, startPos, stopPos,
       cancelled: () => cancelFlag,
       onProgress: (tok, pos) =>
@@ -724,7 +751,6 @@ function init() {
   d.btnGenCancel.addEventListener("click", () => { cancelFlag = true; });
   d.btnGenGo.addEventListener("click", go);
   d.genRange.addEventListener("change", updateRangeUI);
-  d.genModelFile.addEventListener("change", () => pickModel([...d.genModelFile.files]));
   for (const ax of RADAR_AXES) {
     const slider = d["genS_" + ax];
     slider.addEventListener("input", () => {

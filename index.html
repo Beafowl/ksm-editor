@@ -231,10 +231,9 @@
     <label><span>one-hand</span><span class="genslider"><input id="genS_one-hand" type="range" min="0" max="1" step="0.05" value="0.3"><b id="genV_one-hand">0.30</b></span></label>
     <label><span>BPM</span><input id="genBpm" type="number" min="50" max="400" step="0.01" value="170"></label>
     <label id="genMeasuresRow"><span>Measures</span><input id="genMeasures" type="number" min="4" max="128" value="48"></label>
-    <label title="How strongly the sliders steer generation (1 = off)"><span>Guidance</span><input id="genGuidance" type="number" min="1" max="4" step="0.1" value="2"></label>
-    <label title="How strongly generation follows the song (1 = off)"><span>Audio strength</span><input id="genAudioG" type="number" min="1" max="5" step="0.1" value="2.5"></label>
+    <label title="How strongly the sliders steer generation (1 = off)"><span>Guidance</span><input id="genGuidance" type="number" min="1" max="3" step="0.1" value="2"></label>
+    <label title="How strongly generation follows the song (1 = off)"><span>Audio strength</span><input id="genAudioG" type="number" min="1" max="3" step="0.1" value="2.5"></label>
     <label class="chk" title="Place notes following the currently loaded song's onsets">Follow loaded audio <input type="checkbox" id="chkGenAudio"></label>
-    <label title="chartgen.onnx (+ its .json) — cached in the browser after the first pick"><span>Model file</span><input id="genModelFile" type="file" accept=".onnx,.json" multiple></label>
   </div>
   <p id="genStatus" class="hint"></p>
   <div class="btnrow">
