@@ -278,6 +278,11 @@ kbd {
   margin: 10px 0 2px;
 }
 
+#genModal { width: 460px; }
+.genslider { display: flex; align-items: center; gap: 8px; width: 200px; }
+.genslider input[type="range"] { flex: 1; min-width: 0; }
+.genslider b { width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+
 /* ---------- event tooltip ---------- */
 #evTip {
   position: fixed;

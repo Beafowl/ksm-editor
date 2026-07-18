@@ -1914,6 +1914,10 @@ function init() {
     "launchScreen", "btnLaunchFolder", "btnLaunchNew",
     "setupScreen", "setupTitle", "btnSetup", "btnSetupDone", "btnSetupCancel",
     "prefsScreen", "btnPrefs", "btnPrefsClose",
+    "btnGenerate", "genModal", "genLevel", "genBpm", "genMeasures", "genGuidance",
+    "chkGenAudio", "genModelFile", "genStatus", "btnGenGo", "btnGenClose",
+    "genS_notes", "genV_notes", "genS_peak", "genV_peak", "genS_tsumami", "genV_tsumami",
+    "genS_tricky", "genV_tricky", "genS_hand-trip", "genV_hand-trip", "genS_one-hand", "genV_one-hand",
     "sBpm", "sOffset", "btnTapPad", "tapCount", "tapBpm", "tapOffset",
     "btnTapReset", "btnTapUseBpm", "btnTapUseBoth",
     "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
@@ -2119,12 +2123,13 @@ function init() {
     el.addEventListener("mousedown", e => { if (e.target === el) close(); });
   closeOnBackdrop(d.setupScreen, closeSetup);
   closeOnBackdrop(d.prefsScreen, () => { d.prefsScreen.style.display = "none"; });
-  for (const dlg of [d.eventModal, d.helpModal])
+  for (const dlg of [d.eventModal, d.helpModal, d.genModal])
     dlg.addEventListener("mousedown", e => {
       const r = dlg.getBoundingClientRect(); // backdrop clicks land outside the rect
       if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)
         dlg.close();
     });
+  GEN.init();
   // setup page (metadata + timing + tap tool)
   d.btnSetup.addEventListener("click", () => openSetup(false));
   d.btnSetupDone.addEventListener("click", applySetup);
