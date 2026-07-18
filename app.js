@@ -547,7 +547,6 @@ function seekToMs(ms) {
 function setViewMode(mode) {
   ED.viewMode = mode;
   ED.dom.highwayWrap.className = "view-" + mode;
-  ED.dom.btnView.textContent = "View: " + mode[0].toUpperCase() + mode.slice(1) + " ▾";
   ED.dom.viewMenu.querySelectorAll("button").forEach(b =>
     b.classList.toggle("active", b.dataset.view === mode));
   savePrefs();

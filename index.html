@@ -28,7 +28,7 @@
 <header id="topbar">
   <div class="group">
     <div id="saveWrap" class="savewrap">
-      <button id="btnSave" title="Open, create and save charts (Ctrl+S saves the .ksh)">📁 File ▾</button>
+      <button id="btnSave" title="Open, create and save charts (Ctrl+S saves the .ksh)">File ▾</button>
       <div id="saveMenu" class="savemenu" style="display:none">
         <button id="btnFileNew" title="Start a new chart from an audio file">✚ New chart</button>
         <button id="btnFileOpenFolder" title="Open a song folder — loads chart + audio together (Chrome/Edge)">📂 Open folder</button>
@@ -55,8 +55,8 @@
         <button data-view="game">Game</button>
       </div>
     </div>
-    <button id="btnSetup" title="Song setup: metadata, BPM &amp; offset, tap timing (T)">⚙ Setup</button>
-    <button id="btnPrefs" title="Editor preferences: snap, lane speeds, playback">🎚 Preferences</button>
+    <button id="btnSetup" title="Song setup: metadata, BPM &amp; offset, tap timing (T)">Setup</button>
+    <button id="btnPrefs" title="Editor preferences: snap, lane speeds, playback">Preferences</button>
     <button id="btnHelp" title="Shortcuts &amp; help">Help</button>
   </div>
   <input type="file" id="fileKsh" accept=".ksh" hidden>
@@ -268,8 +268,8 @@
       <ol>
         <li><b>📂 Open folder</b> (launch screen or <b>File</b> menu) opens a song folder — chart + audio auto-load and saving writes back. You can also drag &amp; drop .ksh / audio files anywhere.</li>
         <li>For a new song: <b>✚ New chart</b> (launch screen or <b>File</b> menu) — pick the audio, then the <b>Setup</b> page opens for metadata and timing.</li>
-        <li><b>⚙ Setup</b> (<kbd>T</kbd>): one page for metadata (title, artist, difficulty, …) and timing — set <b>BPM</b> and <b>Offset</b> directly, or play the song and tap <kbd>T</kbd> to the beat to estimate both.</li>
-        <li><b>📁 File</b> ▾: <b>Save .ksh</b> writes the chart (or downloads it if no folder is open); <b>Save .kson</b> exports the new KSM v2 format; <b>Save folder as .zip</b> downloads the whole song folder as an archive.</li>
+        <li><b>Setup</b> (<kbd>T</kbd>): one page for metadata (title, artist, difficulty, …) and timing — set <b>BPM</b> and <b>Offset</b> directly, or play the song and tap <kbd>T</kbd> to the beat to estimate both.</li>
+        <li><b>File</b> ▾: <b>Save .ksh</b> writes the chart (or downloads it if no folder is open); <b>Save .kson</b> exports the new KSM v2 format; <b>Save folder as .zip</b> downloads the whole song folder as an archive.</li>
         <li>The chart list next to Save switches between the folder's difficulties — <b>＋ New .ksh…</b> adds a new one that shares the song's audio and timing.</li>
       </ol>
       <h4>Placing objects</h4>
@@ -303,7 +303,7 @@
       <ul>
         <li><kbd>Tab</kbd> (or the View dropdown) switches Editor / Split / Game view. Split is the default.</li>
         <li>The game view renders the track in 3D with USC's camera: zoom_top/bottom/side, tilt (laser + manual), spins, swings and stops all animate. Scrub through a spin to preview it.</li>
-        <li>Editor and game lane speeds are set separately in <b>🎚 Preferences</b>; <kbd>Ctrl+Scroll</kbd> on a view adjusts that view's speed.</li>
+        <li>Editor and game lane speeds are set separately in <b>Preferences</b>; <kbd>Ctrl+Scroll</kbd> on a view adjusts that view's speed.</li>
       </ul>
       <h4>Tools</h4>
       <ul>
@@ -318,7 +318,7 @@
       <ul>
         <li>Unknown chart lines are preserved verbatim on save.</li>
         <li>Playback previews an approximation of FX-hold effects and the laser filter — the game's own DSP will sound richer. <b>Assist tick</b> (Preferences) toggles the note ticks; laser slams always play.</li>
-        <li><b>🎚 Preferences</b> holds snap, lane speeds, playback speed and volumes. Slowing playback keeps the song's pitch.</li>
+        <li><b>Preferences</b> holds snap, lane speeds, playback speed and volumes. Slowing playback keeps the song's pitch.</li>
         <li><b>✨ ChartGPT</b> generates charts: pick level and skill sliders (0–1); with a song loaded it follows the audio (Audio strength sets how tightly). Range “Between bookmarks” regenerates only that section of the current chart. The model ships with the editor.</li>
       </ul>
     </div>
