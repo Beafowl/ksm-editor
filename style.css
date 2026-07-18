@@ -412,6 +412,8 @@ dialog form label {
   color: var(--dim);
 }
 .setup-cols input, .setup-cols select { width: 165px; }
+.filerow { display: flex; gap: 4px; width: 165px; }
+.filerow input { flex: 1; min-width: 0; width: auto; }
 .setup-cols input[type="checkbox"] { width: auto; }
 .setup-cols .hint { margin-bottom: 6px; }
 @media (max-width: 720px) { .setup-cols { grid-template-columns: 1fr; } }

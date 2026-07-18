@@ -1918,6 +1918,8 @@ async function saveZipArchive() {
 /* --------------------------- setup page --------------------------- */
 
 let setupIsNew = false;
+let setupSnap = null;   // pre-setup bpm/offset (cancel restores, Done undoes to it)
+let setupLive = false;  // any live timing edit happened
 
 function setupOpen() { return ED.dom.setupScreen.style.display !== "none"; }
 function prefsOpen() { return ED.dom.prefsScreen.style.display !== "none"; }
@@ -1940,11 +1942,39 @@ function openSetup(isNew = false) {
   d.mPreviewEnd.value = po + Math.max(0, Math.round(parseFloat(m.plength) || 15000));
   d.sBpm.value = KSH.fmtNum(src.bpms[0].v);
   d.sOffset.value = Math.round(parseFloat(m.o) || 0);
+  d.chkMetronome2.checked = ED.opts.metronome;
+  setupSnap = { bpm: src.bpms[0].v, o: m.o };
+  setupLive = false;
   tapReset();
   d.setupScreen.style.display = "";
 }
 
-function closeSetup() { ED.dom.setupScreen.style.display = "none"; }
+function closeSetup(applied = false) {
+  if (!applied && setupLive && setupSnap) {
+    ED.chart.bpms[0].v = setupSnap.bpm;
+    ED.chart.meta.o = setupSnap.o;
+    rebuildTiming();
+    if (ED.playing) resetSched();
+    markEdit();
+    syncInputsFromChart();
+  }
+  setupSnap = null;
+  setupLive = false;
+  ED.dom.setupScreen.style.display = "none";
+}
+
+// BPM/offset typed or tapped in setup apply to the chart immediately, so the
+// metronome can be used to check them by ear
+function applyTimingLive() {
+  const bpm = parseFloat(ED.dom.sBpm.value);
+  const off = Math.round(parseFloat(ED.dom.sOffset.value) || 0);
+  if (isFinite(bpm) && bpm > 0) ED.chart.bpms[0].v = bpm;
+  ED.chart.meta.o = String(off);
+  setupLive = true;
+  rebuildTiming();
+  if (ED.playing) resetSched();
+  markEdit();
+}
 
 function applySetup() {
   const d = ED.dom;
@@ -1956,7 +1986,12 @@ function applySetup() {
     if (ED.dirty && !confirm("Discard unsaved changes and create a new chart?")) return;
     chart = KSH.newChart();
   } else {
+    // live timing edits already mutated the chart; restore the pre-setup
+    // values around pushUndo so a single undo reverts the whole setup
+    const liveB = chart.bpms[0].v, liveO = chart.meta.o;
+    if (setupSnap) { chart.bpms[0].v = setupSnap.bpm; chart.meta.o = setupSnap.o; }
     pushUndo();
+    chart.bpms[0].v = liveB; chart.meta.o = liveO;
   }
   const m = chart.meta;
   m.title = d.mTitle.value; m.artist = d.mArtist.value;
@@ -1979,7 +2014,7 @@ function applySetup() {
     rebuildTiming(); markEdit();
   }
   applyVolumes(); updateTitle();
-  closeSetup();
+  closeSetup(true);
 }
 
 /* --------------------------- BPM tapping --------------------------- */
@@ -1994,7 +2029,7 @@ function tapNow() {
   tap.lastWall = wall;
   tap.wall.push(wall);
   tap.audio.push(ED.playing ? AudioEng.positionMs() : null);
-  updateTapUI();
+  updateTapUI(true);
 }
 
 // song-time taps when the song was playing (accurate at any playback speed)
@@ -2040,7 +2075,7 @@ function tapOffsetEstimate(bpm, ref) {
   return Math.round(cur + delta);
 }
 
-function updateTapUI() {
+function updateTapUI(applyLive = false) {
   const d = ED.dom;
   const raw = tapBpmEstimate();
   const bpm = tapDisplayBpm(raw);
@@ -2049,19 +2084,11 @@ function updateTapUI() {
     : bpm + (Math.abs(raw - bpm) > 0.005 ? ` (raw ${raw.toFixed(2)})` : "");
   const off = tapOffsetEstimate(bpm, parseFloat(d.sOffset.value));
   d.tapOffset.textContent = off !== null ? off + " ms" : (bpm !== null && !ED.playing ? "tap while playing" : "—");
-}
-
-// write tap results into the setup form (applied on Done/Create)
-function useTap(withOffset) {
-  const bpm = tapDisplayBpm(tapBpmEstimate());
-  if (bpm === null) { toast("Tap at least 4 beats first"); return; }
-  ED.dom.sBpm.value = bpm;
-  if (withOffset) {
-    const off = tapOffsetEstimate(bpm, parseFloat(ED.dom.sOffset.value));
-    if (off === null) { toast("Offset needs taps while the song plays"); return; }
-    ED.dom.sOffset.value = off;
+  if (applyLive && bpm !== null && setupOpen()) {
+    d.sBpm.value = bpm;
+    if (off !== null) d.sOffset.value = off;
+    applyTimingLive();
   }
-  toast(`♩=${bpm}${withOffset ? " + offset" : ""} filled in — ${setupIsNew ? "Create" : "Done"} applies it`);
 }
 
 /* ------------------------- launch screen ------------------------- */
@@ -2100,7 +2127,7 @@ function init() {
     "genS_notes", "genV_notes", "genS_peak", "genV_peak", "genS_tsumami", "genV_tsumami",
     "genS_tricky", "genV_tricky", "genS_hand-trip", "genV_hand-trip", "genS_one-hand", "genV_one-hand",
     "sBpm", "sOffset", "btnTapPad", "tapCount", "tapBpm", "tapOffset",
-    "btnTapReset", "btnTapUseBpm", "btnTapUseBoth",
+    "btnTapReset", "chkMetronome2", "btnJacketPick", "fileJacket",
     "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
     "mPo", "mPreviewEnd", "btnPreviewCursor", "btnPreviewEndCursor"])
     d[id] = $(id);
@@ -2190,7 +2217,12 @@ function init() {
   d.inVolHit.addEventListener("input", () => { ED.volHit = parseFloat(d.inVolHit.value); applyVolumes(); savePrefs(); });
   d.inVolMet.addEventListener("input", () => { ED.volMet = parseFloat(d.inVolMet.value); applyVolumes(); savePrefs(); });
   d.selSnap.addEventListener("change", () => { ED.snapDiv = parseInt(d.selSnap.value); savePrefs(); });
-  d.chkMetronome.addEventListener("change", () => { ED.opts.metronome = d.chkMetronome.checked; if (ED.playing) resetSched(); savePrefs(); });
+  d.chkMetronome.addEventListener("change", () => {
+    ED.opts.metronome = d.chkMetronome.checked;
+    d.chkMetronome2.checked = ED.opts.metronome;
+    if (ED.playing) resetSched();
+    savePrefs();
+  });
   d.chkHitsounds.addEventListener("change", () => { ED.opts.hitsounds = d.chkHitsounds.checked; savePrefs(); });
 
   // add-event dialog
@@ -2318,7 +2350,7 @@ function init() {
   // setup page (metadata + timing + tap tool)
   d.btnSetup.addEventListener("click", () => openSetup(false));
   d.btnSetupDone.addEventListener("click", applySetup);
-  d.btnSetupCancel.addEventListener("click", closeSetup);
+  d.btnSetupCancel.addEventListener("click", () => closeSetup());
   // playback keeps running while setup is open, so grab the live position
   const setupCursorMs = () => Math.max(0, Math.round(ED.playing ? AudioEng.positionMs() : ED.curMs));
   d.btnPreviewCursor.addEventListener("click", () => {
@@ -2338,9 +2370,32 @@ function init() {
   });
   d.btnTapPad.addEventListener("click", tapNow);
   d.btnTapReset.addEventListener("click", tapReset);
-  d.btnTapUseBpm.addEventListener("click", () => useTap(false));
-  d.btnTapUseBoth.addEventListener("click", () => useTap(true));
-  d.sOffset.addEventListener("change", updateTapUI);
+  d.sBpm.addEventListener("input", applyTimingLive);
+  d.sOffset.addEventListener("input", () => { applyTimingLive(); updateTapUI(); });
+  d.chkMetronome2.addEventListener("change", () => {
+    ED.opts.metronome = d.chkMetronome2.checked;
+    d.chkMetronome.checked = ED.opts.metronome;
+    if (ED.playing) resetSched();
+    savePrefs();
+  });
+  d.btnJacketPick.addEventListener("click", () => d.fileJacket.click());
+  d.fileJacket.addEventListener("change", async () => {
+    const f = d.fileJacket.files[0];
+    d.fileJacket.value = "";
+    if (!f) return;
+    d.mJacket.value = f.name;
+    if (ED.dirHandle) {
+      try {
+        const fh = await ED.dirHandle.getFileHandle(f.name, { create: true });
+        const w = await fh.createWritable();
+        await w.write(await f.arrayBuffer());
+        await w.close();
+        toast(`Saved ${f.name} to the song folder`);
+      } catch (e) { toast("Could not write the jacket into the folder"); }
+    } else {
+      toast("No song folder open — jacket name set, but the file was not copied");
+    }
+  });
   d.btnHelp.addEventListener("click", () => {
     d.helpModal.showModal();
     d.helpModal.scrollTop = 0; // showModal focuses the Close button at the bottom, which scrolls the dialog

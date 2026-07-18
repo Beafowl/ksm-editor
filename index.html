@@ -148,7 +148,8 @@
         <label>Title <input id="mTitle" type="text"></label>
         <label>Artist <input id="mArtist" type="text"></label>
         <label>Effector <input id="mEffect" type="text"></label>
-        <label>Jacket <input id="mJacket" type="text" placeholder="jacket.png"></label>
+        <label>Jacket <span class="filerow"><input id="mJacket" type="text" placeholder="jacket.png"><button id="btnJacketPick" type="button" title="Choose an image — it is copied into the song folder">…</button></span></label>
+        <input type="file" id="fileJacket" accept="image/*" hidden>
         <label>Difficulty <select id="mDifficulty"></select></label>
         <label>Level <input id="mLevel" type="number" min="1" max="20"></label>
         <label>Music file <input id="mMusic" type="text" placeholder="song.ogg"></label>
@@ -164,10 +165,11 @@
         <h3>Timing</h3>
         <label>BPM <input id="sBpm" type="number" step="0.001" min="1"></label>
         <label>Offset (ms) <input id="sOffset" type="number" step="1"></label>
-        <div class="hint">Offset = position in the audio where beat 1 lands.</div>
+        <label class="chk">Metronome <input type="checkbox" id="chkMetronome2"></label>
+        <div class="hint">Offset = position in the audio where beat 1 lands. BPM and offset apply immediately — play with the metronome on to check them by ear.</div>
         <h3 class="setup-sub">Tap to the beat</h3>
         <p class="hint">Play the song (<kbd>Space</kbd>) and tap <kbd>T</kbd> — or the pad — on every beat.
-        8+ taps give a solid estimate; pausing 2&nbsp;s starts a fresh run. Works at slow playback speed too.</p>
+        8+ taps give a solid estimate and are applied to the chart live; pausing 2&nbsp;s starts a fresh run. Works at slow playback speed too.</p>
         <button id="btnTapPad">TAP</button>
         <div class="tap-stats">
           <span>Taps <b id="tapCount">0</b></span>
@@ -176,8 +178,6 @@
         </div>
         <div class="btnrow" style="justify-content:center">
           <button id="btnTapReset">Reset</button>
-          <button id="btnTapUseBpm">Use BPM</button>
-          <button id="btnTapUseBoth">Use BPM + offset</button>
         </div>
       </section>
     </div>
