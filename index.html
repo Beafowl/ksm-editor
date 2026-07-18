@@ -38,6 +38,15 @@
         <button id="btnSaveZip" title="Download the whole song folder as a .zip archive">Save folder as .zip</button>
       </div>
     </div>
+    <div id="editWrap" class="savewrap">
+      <button id="btnEdit" title="Selection editing">Edit ▾</button>
+      <div id="editMenu" class="savemenu" style="display:none">
+        <button id="btnEditCopy" title="Copy the selection (Ctrl+C)">Copy</button>
+        <button id="btnEditPaste" title="Paste at the cursor position (Ctrl+V)">Paste</button>
+        <hr class="menusep">
+        <button id="btnEditMirror" title="Mirror the selection horizontally (Ctrl+M)">Mirror selection</button>
+      </div>
+    </div>
     <div id="viewWrap" class="savewrap">
       <button id="btnView" title="View mode (Tab cycles)">View ▾</button>
       <div id="viewMenu" class="savemenu" style="display:none">
@@ -269,7 +278,7 @@
         <li><b>Laser tools:</b> each click adds a point. Click on the <i>same row</i> = slam. Clicking the <b>end point of an existing laser</b> continues that laser. <kbd>Enter</kbd>/<kbd>Esc</kbd>/double-click finishes the laser, right-click removes the last point. Placing or dragging a point <b>outside the track</b> automatically makes the laser 2× wide (laserrange).</li>
         <li><b>Curving:</b> Select tool → <b>Shift+click</b> two or more points per laser (several lasers at once work too) → <b>〜 Spline through points</b> replaces each laser between its selected points with a smooth curve through them. Density is automatic — as dense as possible without creating slams, so spans narrower than 14 ticks stay straight.</li>
         <li><b>Right-click</b> (any tool) deletes what's under the cursor — or use the <b>Remove</b> tool (<kbd>6</kbd>) to delete with plain clicks.</li>
-        <li><b>Select tool:</b> drag notes to move, drag a hold's tail to resize, drag laser points freely. <b>Shift+click</b> selects multiple objects — drag moves them together, <kbd>Del</kbd> deletes all, and picking an effect applies to every selected FX hold. When laser points overlap, clicking the same spot again picks the next stacked point.</li>
+        <li><b>Select tool:</b> drag on empty space to draw a selection box; drag notes to move, drag a hold's tail to resize, drag laser points freely. <b>Shift+click</b> selects multiple objects — drag moves them together, <kbd>Del</kbd> deletes all, and picking an effect applies to every selected FX hold. When laser points overlap, clicking the same spot again picks the next stacked point.</li>
       </ul>
       <h4>Effects &amp; events</h4>
       <ul>
@@ -303,6 +312,7 @@
       <h4>Editing</h4>
       <ul>
         <li><kbd>Ctrl+Z</kbd> undo · <kbd>Ctrl+Y</kbd> redo · <kbd>Del</kbd> delete selection · <kbd>Ctrl+S</kbd> save</li>
+        <li><kbd>Ctrl+C</kbd> copy selection · <kbd>Ctrl+V</kbd> paste at the cursor · <kbd>Ctrl+M</kbd> mirror selection (also in the <b>Edit</b> menu)</li>
       </ul>
       <h4>Notes</h4>
       <ul>

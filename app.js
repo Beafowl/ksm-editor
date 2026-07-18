@@ -10,7 +10,7 @@ const ED = {
   viewMode: "split",
   edSpeed: 1, hispeed: 1, // editor / game view lane speeds (zoom = 2 * edSpeed)
   tool: "bt",
-  sel: null, selList: [], hover: null,
+  sel: null, selList: [], hover: null, rubber: null, clipboard: null,
   laserEdit: null,
   drag: null,
   chartVersion: 0, dirty: false,
@@ -122,7 +122,7 @@ function redo() {
   afterRestore();
 }
 function afterRestore() {
-  ED.sel = null; ED.selList = []; ED.laserEdit = null; ED.drag = null;
+  ED.sel = null; ED.selList = []; ED.laserEdit = null; ED.drag = null; ED.rubber = null;
   rebuildTiming(); markEdit();
   syncInputsFromChart(); updateInspector();
 }
@@ -347,7 +347,12 @@ function onHighwayDown(e) {
     const add = e.shiftKey;
     const wasInGroup = hit && ED.selList.some(s => sameSel(s, hit));
     setSel(hit, add);
-    if (!hit || add) return; // shift-click only toggles membership
+    if (!hit) {
+      // drag on empty space: rubber-band selection (shift adds to the selection)
+      ED.drag = { mode: "rubber", x0: x, y0: y, add };
+      return;
+    }
+    if (add) return; // shift-click only toggles membership
     const G = ED.G || Render.geom();
     if (hit.type === "bt" || hit.type === "fx") {
       if (ED.selList.length > 1) {
@@ -417,7 +422,10 @@ function onHighwayMove(e) {
   const G = ED.G || Render.geom();
   const h = hitInfo(x, y);
 
-  if (d.mode === "placeNote") {
+  if (d.mode === "rubber") {
+    d.x1 = x; d.y1 = y;
+    ED.rubber = { x0: d.x0, y0: d.y0, x1: x, y1: y };
+  } else if (d.mode === "placeNote") {
     d.note.l = Math.max(0, snapTick(G.tickOfY(y)) - d.startTick);
   } else if (d.mode === "moveNote") {
     if (!d.grabbed) { pushUndo(); d.grabbed = true; }
@@ -461,7 +469,12 @@ function onHighwayUp() {
   const d = ED.drag;
   if (!d) return;
   ED.drag = null;
-  if (d.mode === "placeNote") {
+  if (d.mode === "rubber") {
+    ED.rubber = null;
+    if (d.x1 === undefined || (Math.abs(d.x1 - d.x0) < 3 && Math.abs(d.y1 - d.y0) < 3))
+      return; // was just a click on empty space
+    rubberSelect(d.x0, d.y0, d.x1, d.y1, d.add);
+  } else if (d.mode === "placeNote") {
     cleanupOverlaps(d.arr, d.note);
     markEdit(); updateInspector();
   } else if ((d.mode === "moveNote" || d.mode === "resizeNote") && d.grabbed) {
@@ -621,6 +634,173 @@ function deleteSelection() {
   for (const s of ED.selList)
     if (s.type !== "laserpoint") deleteObject(s);
   markEdit(); setSel(null);
+}
+
+/* ---------------- rubber-band selection ---------------- */
+
+// select everything inside the pixel rect; add=true merges with the selection
+function rubberSelect(x0, y0, x1, y1, add) {
+  const G = ED.G || Render.geom();
+  const rx0 = Math.min(x0, x1), rx1 = Math.max(x0, x1);
+  const tA = G.tickOfY(Math.min(y0, y1)), tB = G.tickOfY(Math.max(y0, y1));
+  const tLo = Math.min(tA, tB), tHi = Math.max(tA, tB);
+  const picked = [];
+  const c = ED.chart;
+  for (let l = 0; l < 4; l++) {
+    const cx = G.trackX + G.trackW * (l + 0.5) / 4;
+    if (cx < rx0 || cx > rx1) continue;
+    for (const n of c.bt[l])
+      if (n.y + Math.max(n.l, 0) >= tLo && n.y <= tHi)
+        picked.push({ type: "bt", lane: l, note: n });
+  }
+  for (let s = 0; s < 2; s++) {
+    const cx = G.trackX + G.trackW * (s + 0.5) / 2;
+    if (cx >= rx0 && cx <= rx1)
+      for (const n of c.fx[s])
+        if (n.y + Math.max(n.l, 0) >= tLo && n.y <= tHi)
+          picked.push({ type: "fx", lane: s, note: n });
+    // a laser is picked (whole segment) when any of its points is in the rect
+    for (const seg of c.lasers[s])
+      if (seg.points.some(p => p.y >= tLo && p.y <= tHi &&
+          G.laserX(p.v, seg.wide) >= rx0 && G.laserX(p.v, seg.wide) <= rx1))
+        picked.push({ type: "laserseg", side: s, seg });
+  }
+  if (!add) { ED.selList = []; ED.sel = null; }
+  for (const p of picked)
+    if (!ED.selList.some(s => sameSel(s, p))) ED.selList.push(p);
+  ED.sel = ED.selList[ED.selList.length - 1] || null;
+  updateInspector();
+}
+
+/* ---------------- clipboard & mirroring ---------------- */
+
+// selection -> {notes + whole laser segments}; laserpoint entries widen to their segment
+function selectionParts() {
+  const bt = [], fx = [], segs = new Map(); // seg -> side
+  for (const s of ED.selList) {
+    if (s.type === "bt") bt.push({ lane: s.lane, note: s.note });
+    else if (s.type === "fx") fx.push({ side: s.lane, note: s.note });
+    else if (s.type === "laserseg" || s.type === "laserpoint") segs.set(s.seg, s.side);
+  }
+  return { bt, fx, segs };
+}
+
+function copySelection() {
+  if (!ED.selList.length) { toast("Nothing selected to copy"); return; }
+  const { bt, fx, segs } = selectionParts();
+  let anchor = Infinity;
+  for (const { note } of bt) anchor = Math.min(anchor, note.y);
+  for (const { note } of fx) anchor = Math.min(anchor, note.y);
+  for (const seg of segs.keys()) anchor = Math.min(anchor, seg.points[0].y);
+  if (!isFinite(anchor)) return;
+  ED.clipboard = {
+    bt: bt.map(({ lane, note }) => ({ lane, y: note.y - anchor, l: note.l })),
+    fx: fx.map(({ side, note }) => ({ side, y: note.y - anchor, l: note.l, fx: note.fx })),
+    lasers: [...segs.entries()].map(([seg, side]) => ({
+      side, wide: seg.wide,
+      points: seg.points.map(p => ({ y: p.y - anchor, v: p.v })),
+    })),
+  };
+  const n = bt.length + fx.length + segs.size;
+  toast(`Copied ${n} object${n === 1 ? "" : "s"}`);
+}
+
+// remove existing segments overlapping `seg` on `side` (same rule as
+// finalizeLaser), but never segments in `protect`
+function removeOverlappingSegs(side, seg, protect) {
+  const first = seg.points[0].y, last = seg.points[seg.points.length - 1].y;
+  const arr = ED.chart.lasers[side];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const o = arr[i];
+    if (o === seg || protect.has(o)) continue;
+    if (o.points[0].y <= last + KSH.SLAM_TICKS && o.points[o.points.length - 1].y >= first - KSH.SLAM_TICKS)
+      arr.splice(i, 1);
+  }
+}
+
+function pasteClipboard() {
+  const clip = ED.clipboard;
+  if (!clip) { toast("Clipboard is empty — Ctrl+C copies the selection"); return; }
+  const base = Math.max(0, snapTick(ED.timing.msToTick(ED.curMs)));
+  pushUndo();
+  const newSel = [];
+  for (const n of clip.bt) {
+    const note = { y: base + n.y, l: n.l };
+    ED.chart.bt[n.lane].push(note);
+    cleanupOverlaps(ED.chart.bt[n.lane], note);
+    newSel.push({ type: "bt", lane: n.lane, note });
+  }
+  for (const n of clip.fx) {
+    const note = { y: base + n.y, l: n.l, fx: n.fx };
+    ED.chart.fx[n.side].push(note);
+    cleanupOverlaps(ED.chart.fx[n.side], note);
+    newSel.push({ type: "fx", lane: n.side, note });
+  }
+  const protect = new Set();
+  for (const g of clip.lasers) {
+    const seg = { wide: g.wide, points: g.points.map(p => ({ y: base + p.y, v: p.v })) };
+    ED.chart.lasers[g.side].push(seg);
+    protect.add(seg);
+    newSel.push({ type: "laserseg", side: g.side, seg });
+  }
+  for (const s of newSel)
+    if (s.type === "laserseg") removeOverlappingSegs(s.side, s.seg, protect);
+  for (const side of ED.chart.lasers) side.sort((a, b) => a.points[0].y - b.points[0].y);
+  ED.selList = newSel;
+  ED.sel = newSel[newSel.length - 1] || null;
+  markEdit(); updateInspector();
+  toast(`Pasted at ${tickLabel(base)} — the paste is selected`);
+}
+
+// mirror the selection horizontally: BT ABCD->DCBA, FX L<->R, lasers swap
+// sides and flip their values
+function mirrorSelection() {
+  if (!ED.selList.length) { toast("Nothing selected to mirror"); return; }
+  const { bt, fx, segs } = selectionParts();
+  pushUndo();
+  const newSel = [];
+  const moved = new Set();
+  for (const { lane, note } of bt) {
+    const i = ED.chart.bt[lane].indexOf(note);
+    if (i >= 0) ED.chart.bt[lane].splice(i, 1);
+    moved.add(note);
+  }
+  for (const { lane, note } of bt) {
+    ED.chart.bt[3 - lane].push(note);
+    newSel.push({ type: "bt", lane: 3 - lane, note });
+  }
+  for (const { side, note } of fx) {
+    const i = ED.chart.fx[side].indexOf(note);
+    if (i >= 0) ED.chart.fx[side].splice(i, 1);
+    moved.add(note);
+  }
+  for (const { side, note } of fx) {
+    ED.chart.fx[1 - side].push(note);
+    newSel.push({ type: "fx", lane: 1 - side, note });
+  }
+  // drop non-moved notes that now overlap a moved one, then sort
+  for (const s of newSel) {
+    const arr = s.type === "fx" ? ED.chart.fx[s.lane] : ED.chart.bt[s.lane];
+    for (let i = arr.length - 1; i >= 0; i--)
+      if (!moved.has(arr[i]) && overlaps(arr[i], s.note)) arr.splice(i, 1);
+    arr.sort((a, b) => a.y - b.y);
+  }
+  const protect = new Set(segs.keys());
+  for (const [seg, side] of segs) {
+    const i = ED.chart.lasers[side].indexOf(seg);
+    if (i >= 0) ED.chart.lasers[side].splice(i, 1);
+  }
+  for (const [seg, side] of segs) {
+    for (const p of seg.points) p.v = Math.round((1 - p.v) * 50) / 50;
+    ED.chart.lasers[1 - side].push(seg);
+    removeOverlappingSegs(1 - side, seg, protect);
+    newSel.push({ type: "laserseg", side: 1 - side, seg });
+  }
+  for (const side of ED.chart.lasers) side.sort((a, b) => a.points[0].y - b.points[0].y);
+  ED.selList = newSel;
+  ED.sel = newSel[newSel.length - 1] || null;
+  markEdit(); updateInspector();
+  toast(`Mirrored ${newSel.length} object${newSel.length === 1 ? "" : "s"}`);
 }
 
 /* ----------------------- FX preview plan ----------------------- */
@@ -1500,7 +1680,7 @@ function setChart(chart) {
   if (ED.playing) pausePlayback();
   ED.chart = chart;
   ED.undoStack = []; ED.redoStack = [];
-  ED.sel = null; ED.selList = []; ED.laserEdit = null; ED.drag = null;
+  ED.sel = null; ED.selList = []; ED.laserEdit = null; ED.drag = null; ED.rubber = null;
   ED.dirty = false; hitDirty = true;
   ED.curMs = 0;
   rebuildTiming();
@@ -1910,6 +2090,7 @@ function init() {
     "evRowSig", "inEvSigN", "inEvSigD", "evRowText", "inEvText", "evExplain", "btnEvInsert", "btnEvCancel",
     "btnSave", "saveWrap", "saveMenu", "btnFileNew", "btnFileOpenFolder", "btnSaveKsh", "btnSaveKson", "btnSaveZip",
     "btnHelp", "btnView", "viewWrap", "viewMenu",
+    "btnEdit", "editWrap", "editMenu", "btnEditCopy", "btnEditPaste", "btnEditMirror",
     "fileKsh", "fileAudio", "helpModal",
     "launchScreen", "btnLaunchFolder", "btnLaunchNew",
     "setupScreen", "setupTitle", "btnSetup", "btnSetupDone", "btnSetupCancel",
@@ -2077,19 +2258,24 @@ function init() {
     launchNewPending = true;
     d.fileAudio.click();
   });
-  // File and View dropdown menus
+  // File / Edit / View dropdown menus: exclusive, closed by outside clicks
+  const menus = [[d.btnSave, d.saveMenu, d.saveWrap],
+                 [d.btnEdit, d.editMenu, d.editWrap],
+                 [d.btnView, d.viewMenu, d.viewWrap]];
+  const hideMenus = except => {
+    for (const [, m] of menus) if (m !== except) m.style.display = "none";
+  };
   const hideSaveMenu = () => { d.saveMenu.style.display = "none"; };
   const hideViewMenu = () => { d.viewMenu.style.display = "none"; };
-  d.btnSave.addEventListener("click", e => {
-    e.stopPropagation();
-    hideViewMenu();
-    d.saveMenu.style.display = d.saveMenu.style.display === "none" ? "" : "none";
-  });
-  d.btnView.addEventListener("click", e => {
-    e.stopPropagation();
-    hideSaveMenu();
-    d.viewMenu.style.display = d.viewMenu.style.display === "none" ? "" : "none";
-  });
+  for (const [btn, menu] of menus)
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      hideMenus(menu);
+      menu.style.display = menu.style.display === "none" ? "" : "none";
+    });
+  d.btnEditCopy.addEventListener("click", () => { hideMenus(); copySelection(); });
+  d.btnEditPaste.addEventListener("click", () => { hideMenus(); pasteClipboard(); });
+  d.btnEditMirror.addEventListener("click", () => { hideMenus(); mirrorSelection(); });
   d.viewMenu.querySelectorAll("button").forEach(b =>
     b.addEventListener("click", () => { hideViewMenu(); setViewMode(b.dataset.view); }));
   d.btnFileNew.addEventListener("click", () => {
@@ -2107,8 +2293,7 @@ function init() {
   d.btnSaveKson.addEventListener("click", () => { hideSaveMenu(); saveKson(); });
   d.btnSaveZip.addEventListener("click", () => { hideSaveMenu(); saveZipArchive(); });
   document.addEventListener("click", e => {
-    if (!d.saveWrap.contains(e.target)) hideSaveMenu();
-    if (!d.viewWrap.contains(e.target)) hideViewMenu();
+    if (!menus.some(([, , wrap]) => wrap.contains(e.target))) hideMenus();
   });
   d.selDiff.addEventListener("change", () => {
     if (d.selDiff.value === "new") addKshToFolder();
@@ -2210,6 +2395,9 @@ function onKeyDown(e) {
   if (ctrl && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (ctrl && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
   if (ctrl && e.key.toLowerCase() === "s") { e.preventDefault(); saveChart(); return; }
+  if (ctrl && e.key.toLowerCase() === "c") { e.preventDefault(); copySelection(); return; }
+  if (ctrl && e.key.toLowerCase() === "v") { e.preventDefault(); pasteClipboard(); return; }
+  if (ctrl && e.key.toLowerCase() === "m") { e.preventDefault(); mirrorSelection(); return; }
   switch (e.key) {
     case " ": e.preventDefault(); togglePlay(); break;
     case "ArrowUp": e.preventDefault(); seekBySnap(1); break;
