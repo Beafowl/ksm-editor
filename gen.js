@@ -40,8 +40,8 @@ const PAD = TID["<pad>"], BOS = TID["<bos>"], EOS = TID["<eos>"], UNCOND = TID["
 const PREFIX_LEN = 9;
 
 // model config; overridden by the embedded/picked model's metadata
-let MC = { n_layer: 8, n_head: 6, head_dim: 64, audio_dim: 16, ctx: 2048 };
-const featsPerCell = () => Math.max(1, Math.floor(MC.audio_dim / WINDOW));
+let MC = { n_layer: 8, n_head: 6, head_dim: 64, audio_dim: 16, ctx: 2048, mel_bins: 0, fp16: false };
+const featsPerCell = () => MC.mel_bins || Math.max(1, Math.floor(MC.audio_dim / WINDOW));
 
 const radarBucket = v => Math.max(0, Math.min(10, Math.round(v / 200 * 10)));
 function bpmBucket(bpm) {
@@ -214,10 +214,39 @@ const _hann = (() => {
   return w;
 })();
 
+// 64-bin HTK mel filterbank (mirrors sdvx_dataset/mel.py exactly)
+function melFilterbank(sr) {
+  const nBins = N_FFT / 2 + 1, nMels = 64;
+  const melToHz = m => 700 * (10 ** (m / 2595) - 1);
+  const top = 2595 * Math.log10(1 + (sr / 2) / 700);
+  const pts = [];
+  for (let i = 0; i < nMels + 2; i++) pts.push(melToHz(top * i / (nMels + 1)));
+  const filt = [];
+  for (let m = 0; m < nMels; m++) {
+    const w = new Float32Array(nBins);
+    const lo = pts[m], mid = pts[m + 1], hi = pts[m + 2];
+    for (let k = 0; k < nBins; k++) {
+      const f = k * sr / N_FFT;
+      w[k] = Math.max(0, Math.min((f - lo) / Math.max(mid - lo, 1e-9),
+                                  (hi - f) / Math.max(hi - mid, 1e-9)));
+    }
+    filt.push(w);
+  }
+  return filt;
+}
+
+// numpy-compatible percentile (linear interpolation)
+function percentileLinear(arr, q) {
+  const a = Float64Array.from(arr).sort();
+  const pos = (a.length - 1) * q;
+  const lo = Math.floor(pos), frac = pos - lo;
+  return a[lo] + frac * ((a[Math.min(lo + 1, a.length - 1)] ?? a[lo]) - a[lo]);
+}
+
 // AudioBuffer -> per-frame features (mirrors sdvx_dataset/onsets.py):
 // bands[3] = clipped log-spectral-flux per band, rms = log loudness, total =
 // broadband flux (the v1 scalar the first model generation was trained on)
-function analyzeAudio(buffer) {
+function analyzeAudio(buffer, wantMel) {
   const n = buffer.length, sr = buffer.sampleRate;
   const mono = new Float32Array(n);
   const nc = Math.min(2, buffer.numberOfChannels);
@@ -231,6 +260,8 @@ function analyzeAudio(buffer) {
   const feats = [new Float32Array(frames), new Float32Array(frames),
                  new Float32Array(frames), new Float32Array(frames)];
   const total = new Float32Array(frames);
+  const melFilt = wantMel ? melFilterbank(sr) : null;
+  const melDb = wantMel ? new Float32Array(frames * 64) : null;
   const re = new Float32Array(N_FFT), im = new Float32Array(N_FFT);
   let prev = null;
   for (let f = 0; f < frames; f++) {
@@ -245,7 +276,18 @@ function analyzeAudio(buffer) {
     feats[3][f] = Math.log1p(Math.sqrt(energy / N_FFT) * 20);
     fft1024(re, im);
     const mag = new Float32Array(N_FFT / 2 + 1);
-    for (let i = 0; i <= N_FFT / 2; i++) mag[i] = Math.log1p(Math.hypot(re[i], im[i]));
+    const power = new Float32Array(N_FFT / 2 + 1);
+    for (let i = 0; i <= N_FFT / 2; i++) {
+      power[i] = re[i] * re[i] + im[i] * im[i];
+      mag[i] = Math.log1p(Math.sqrt(power[i]));
+    }
+    if (melFilt)
+      for (let m = 0; m < 64; m++) {
+        let acc = 0;
+        const w = melFilt[m];
+        for (let i = 0; i <= N_FFT / 2; i++) acc += w[i] * power[i];
+        melDb[f * 64 + m] = 10 * Math.log10(acc + 1e-10);
+      }
     if (prev) {
       let s0 = 0, s1 = 0, s2 = 0;
       for (let i = 0; i <= N_FFT / 2; i++) {
@@ -265,14 +307,32 @@ function analyzeAudio(buffer) {
     const ref = p98(a);
     if (ref > 0) for (let i = 0; i < a.length; i++) a[i] = Math.min(1, a[i] / ref);
   }
-  return { feats, total, fps: sr / HOP };
+  return { feats, total, melDb, fps: sr / HOP };
 }
 
 // -> Float32Array (nCells + WINDOW) * F, layout [cell][feature]
 function gridFeatures(analysis, bpm, offsetMs, nCells) {
   const F = featsPerCell();
-  const src = F === 1 ? [analysis.total] : analysis.feats.slice(0, F);
   const out = new Float32Array((nCells + WINDOW) * F);
+  if (F === 64) {
+    // mel path (mirrors mel.py: p95 ref, 60 dB range, u8 quantization)
+    const db = analysis.melDb, frames = db.length / 64;
+    const ref = percentileLinear(db, 0.95);
+    for (let c = 0; c < nCells; c++) {
+      const idx = Math.min(frames - 1, Math.max(0,
+        Math.round((offsetMs + c * 15000 / bpm) / 1000 * analysis.fps)));
+      for (let m = 0; m < 64; m++) {
+        let mx = 0;
+        for (let k = Math.max(0, idx - 1); k <= Math.min(frames - 1, idx + 1); k++) {
+          const x = Math.max(0, Math.min(1, (db[k * 64 + m] - ref) / 60 + 1));
+          mx = Math.max(mx, x);
+        }
+        out[c * F + m] = Math.round(mx * 255) / 255;
+      }
+    }
+    return out;
+  }
+  const src = F === 1 ? [analysis.total] : analysis.feats.slice(0, F);
   const nFrames = src[0].length;
   for (let c = 0; c < nCells; c++) {
     const idx = Math.round((offsetMs + c * 15000 / bpm) / 1000 * analysis.fps);
@@ -284,6 +344,43 @@ function gridFeatures(analysis, bpm, offsetMs, nCells) {
     }
   }
   return out;
+}
+
+/* ---------------- fp16 helpers (full-fp16 exported models) ---------------- */
+
+const _f32buf = new Float32Array(1), _u32buf = new Uint32Array(_f32buf.buffer);
+function f32ToF16(x) {
+  _f32buf[0] = x;
+  const u = _u32buf[0];
+  const sign = (u >>> 16) & 0x8000;
+  const exp = (u >>> 23) & 0xff, man = u & 0x7fffff;
+  if (exp === 255) return sign | 0x7c00 | (man ? 1 : 0);
+  const e = exp - 127 + 15;
+  if (e >= 31) return sign | 0x7c00;
+  if (e <= 0) {
+    if (e < -10) return sign;
+    return sign | (((man | 0x800000) >>> (1 - e)) >>> 13);
+  }
+  return sign | (e << 10) | (man >>> 13);
+}
+function f16ToF32(h) {
+  const sign = (h & 0x8000) << 16;
+  let exp = (h >>> 10) & 0x1f, man = h & 0x3ff;
+  if (exp === 0) {
+    if (!man) { _u32buf[0] = sign; return _f32buf[0]; }
+    while (!(man & 0x400)) { man <<= 1; exp--; }
+    exp++; man &= 0x3ff;
+  } else if (exp === 31) {
+    _u32buf[0] = sign | 0x7f800000 | (man << 13);
+    return _f32buf[0];
+  }
+  _u32buf[0] = sign | ((exp - 15 + 127) << 23) | (man << 13);
+  return _f32buf[0];
+}
+function toHalfArray(f32) {
+  const u = new Uint16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) u[i] = f32ToF16(f32[i]);
+  return u;
 }
 
 /* ------------------------- ORT session ------------------------- */
@@ -442,14 +539,16 @@ async function generate(opts) {
     return w;
   };
 
+  const FT = MC.fp16 ? "float16" : "float32";
+  const mkF = (arr, dims) => new ort.Tensor(FT, MC.fp16 ? toHalfArray(arr) : arr, dims);
   let past = [];
   const runStep = async (idsPerRow, audioF, mask, S, P) => {
     const flat = [];
     for (const row of idsPerRow) flat.push(...row);
     const f = {
       idx: new ort.Tensor("int64", BigInt64Array.from(flat.map(BigInt)), [B, S]),
-      audio: new ort.Tensor("float32", audioF, [B, S, A]),
-      mask: new ort.Tensor("float32", mask, [B, 1, S, P + S]),
+      audio: mkF(audioF, [B, S, A]),
+      mask: mkF(mask, [B, 1, S, P + S]),
     };
     for (let i = 0; i < NL; i++) {
       f["past_k_" + i] = past[2 * i];
@@ -466,7 +565,8 @@ async function generate(opts) {
   const prefill = async (tailTokens, tailTicks) => {
     past = [];
     for (let i = 0; i < 2 * NL; i++)
-      past.push(new ort.Tensor("float32", new Float32Array(0), [B, NH, 0, HD]));
+      past.push(new ort.Tensor(FT, MC.fp16 ? new Uint16Array(0) : new Float32Array(0),
+                               [B, NH, 0, HD]));
     const rowsC = cond.concat(tailTokens);
     const rowsU = uncond.concat(tailTokens);
     const S0 = rowsC.length;
@@ -501,10 +601,19 @@ async function generate(opts) {
   const maxTok = opts.maxTokens || 20000;
   const rangeMode = !!opts.context;
 
+  const lastLogits = o => {
+    const S = o.logits.dims[1], data = o.logits.data;
+    const res = new Float32Array(B * V);
+    for (let b = 0; b < B; b++) {
+      const start = (b * S + (S - 1)) * V;
+      for (let i = 0; i < V; i++)
+        res[b * V + i] = MC.fp16 ? f16ToF32(data[start + i]) : data[start + i];
+    }
+    return res;
+  };
   while (body.length < maxTok && pos < opts.stopPos) {
-    const lg = out.logits.data;
-    const S = out.logits.dims[1];
-    const off = b => (b * S + (S - 1)) * V;
+    const lg = lastLogits(out);
+    const off = b => b * V;
     const mixed = new Float32Array(V);
     for (let i = 0; i < V; i++) {
       let x = lg[off(0) + i] + (gr - 1) * (lg[off(0) + i] - lg[off(1) + i]);
@@ -659,7 +768,7 @@ async function go() {
     if (d.chkGenAudio.checked && AudioEng.buffer) {
       updateStatus("analyzing audio ...");
       offsetMs = Math.max(0, Math.round(parseFloat(ED.chart.meta.o) || 0));
-      const analysis = analyzeAudio(AudioEng.buffer);
+      const analysis = analyzeAudio(AudioEng.buffer, MC.mel_bins > 0);
       onsets = gridFeatures(analysis, bpm, offsetMs, Math.ceil(stopPos / GRID) + 1);
     }
 
