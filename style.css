@@ -80,10 +80,23 @@ kbd {
   flex: none;
   flex-wrap: wrap;
 }
-#topbar .group { display: flex; align-items: center; gap: 6px; }
-#topbar .group.right { margin-left: auto; }
+#topbar .group { display: flex; align-items: center; gap: 2px; }
 #topbar label { display: flex; align-items: center; gap: 4px; color: var(--dim); }
-#topbar { position: relative; }
+#topbar { position: relative; padding: 3px 8px; }
+/* menu-bar look: flat, borderless items that highlight on hover */
+#topbar > button, #topbar .group > button, #topbar .savewrap > button {
+  background: none;
+  border: 1px solid transparent; /* keep metrics; no visible border */
+  border-radius: 4px;
+  padding: 4px 10px;
+}
+#topbar > button:hover, #topbar .group > button:hover, #topbar .savewrap > button:hover {
+  background: #262636;
+  border-color: transparent;
+}
+#topbar button:disabled { opacity: 0.45; cursor: default; }
+#topbar button:disabled:hover { background: none; }
+#btnGenerate { margin-left: auto; }
 .menusep { border: none; border-top: 1px solid var(--border); margin: 4px 2px; }
 .savemenu button.active { color: var(--accent2); }
 #selDiff { /* exact page-center regardless of the side clusters' widths */
