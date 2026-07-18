@@ -1932,7 +1932,11 @@ function openSetup(isNew = false) {
   if (isNew && AudioEng.fileName) m.m = AudioEng.fileName;
   d.setupTitle.textContent = isNew ? "New chart" : "Song setup";
   d.btnSetupDone.textContent = isNew ? "Create" : "Done";
-  d.mTitle.value = m.title || ""; d.mArtist.value = m.artist || "";
+  // titles of licensed songs are stored as  title「source」より  — split them
+  const tm = /^(.*)「(.+)」より$/.exec(m.title || "");
+  d.mTitle.value = tm ? tm[1] : (m.title || "");
+  d.mSource.value = tm ? tm[2] : "";
+  d.mArtist.value = m.artist || "";
   d.mEffect.value = m.effect || ""; d.mJacket.value = m.jacket || "";
   d.mDifficulty.value = DIFFICULTIES.includes(m.difficulty) ? m.difficulty : "light";
   d.mLevel.value = m.level || "1"; d.mMvol.value = m.mvol || "75";
@@ -1994,7 +1998,9 @@ function applySetup() {
     chart.bpms[0].v = liveB; chart.meta.o = liveO;
   }
   const m = chart.meta;
-  m.title = d.mTitle.value; m.artist = d.mArtist.value;
+  const src2 = d.mSource.value.trim();
+  m.title = src2 ? `${d.mTitle.value}「${src2}」より` : d.mTitle.value;
+  m.artist = d.mArtist.value;
   m.effect = d.mEffect.value; m.jacket = d.mJacket.value;
   m.difficulty = d.mDifficulty.value; m.level = d.mLevel.value;
   m.mvol = d.mMvol.value; m.m = d.mMusic.value;
@@ -2128,7 +2134,7 @@ function init() {
     "genS_tricky", "genV_tricky", "genS_hand-trip", "genV_hand-trip", "genS_one-hand", "genV_one-hand",
     "sBpm", "sOffset", "btnTapPad", "tapCount", "tapBpm", "tapOffset",
     "btnTapReset", "chkMetronome2", "btnJacketPick", "fileJacket",
-    "mTitle", "mArtist", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
+    "mTitle", "mArtist", "mSource", "mEffect", "mJacket", "mDifficulty", "mLevel", "mMvol", "mMusic",
     "mPo", "mPreviewEnd", "btnPreviewCursor", "btnPreviewEndCursor"])
     d[id] = $(id);
 
