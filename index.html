@@ -46,7 +46,7 @@
         <button data-view="game">Game</button>
       </div>
     </div>
-    <button id="btnGenerate" title="Generate a chart with the ML model (needs a model file)">✨ Generate</button>
+    <button id="btnGenerate" title="Generate a chart with the ChartGPT model">✨ ChartGPT</button>
     <button id="btnSetup" title="Song setup: metadata, BPM &amp; offset, tap timing (T)">⚙ Setup</button>
     <button id="btnPrefs" title="Editor preferences: snap, lane speeds, playback">🎚 Preferences</button>
     <button id="btnHelp" title="Shortcuts &amp; help">Help</button>
@@ -206,8 +206,13 @@
 </div>
 
 <dialog id="genModal">
-  <h3>✨ Generate chart</h3>
+  <h3>✨ ChartGPT</h3>
   <div class="ev-form">
+    <label title="Generate the whole chart, or regenerate only the part between two bookmarks"><span>Range</span><select id="genRange">
+      <option value="all">Whole chart</option>
+      <option value="bm">Between bookmarks</option>
+    </select></label>
+    <label id="genBmRow" style="display:none"><span>From / to</span><span class="genslider"><select id="genBmFrom"></select><select id="genBmTo"></select></span></label>
     <label><span>Level</span><input id="genLevel" type="number" min="1" max="20" value="16"></label>
     <label><span>notes</span><span class="genslider"><input id="genS_notes" type="range" min="0" max="1" step="0.05" value="0.5"><b id="genV_notes">0.50</b></span></label>
     <label><span>peak</span><span class="genslider"><input id="genS_peak" type="range" min="0" max="1" step="0.05" value="0.5"><b id="genV_peak">0.50</b></span></label>
@@ -216,14 +221,16 @@
     <label><span>hand-trip</span><span class="genslider"><input id="genS_hand-trip" type="range" min="0" max="1" step="0.05" value="0.2"><b id="genV_hand-trip">0.20</b></span></label>
     <label><span>one-hand</span><span class="genslider"><input id="genS_one-hand" type="range" min="0" max="1" step="0.05" value="0.3"><b id="genV_one-hand">0.30</b></span></label>
     <label><span>BPM</span><input id="genBpm" type="number" min="50" max="400" step="0.01" value="170"></label>
-    <label><span>Measures</span><input id="genMeasures" type="number" min="4" max="128" value="48"></label>
+    <label id="genMeasuresRow"><span>Measures</span><input id="genMeasures" type="number" min="4" max="128" value="48"></label>
     <label title="How strongly the sliders steer generation (1 = off)"><span>Guidance</span><input id="genGuidance" type="number" min="1" max="4" step="0.1" value="2"></label>
+    <label title="How strongly generation follows the song (1 = off)"><span>Audio strength</span><input id="genAudioG" type="number" min="1" max="5" step="0.1" value="2.5"></label>
     <label class="chk" title="Place notes following the currently loaded song's onsets">Follow loaded audio <input type="checkbox" id="chkGenAudio"></label>
     <label title="chartgen.onnx (+ its .json) — cached in the browser after the first pick"><span>Model file</span><input id="genModelFile" type="file" accept=".onnx,.json" multiple></label>
   </div>
   <p id="genStatus" class="hint"></p>
   <div class="btnrow">
     <button id="btnGenClose" type="button">Close</button>
+    <button id="btnGenCancel" type="button" class="danger" style="display:none;width:auto;margin:0">Cancel generation</button>
     <button id="btnGenGo" class="primary" type="button">Generate</button>
   </div>
 </dialog>
@@ -302,7 +309,7 @@
         <li>Unknown chart lines are preserved verbatim on save.</li>
         <li>Playback previews an approximation of FX-hold effects and the laser filter — the game's own DSP will sound richer. <b>Assist tick</b> (Preferences) toggles the note ticks; laser slams always play.</li>
         <li><b>🎚 Preferences</b> holds snap, lane speeds, playback speed and volumes. Slowing playback keeps the song's pitch.</li>
-        <li><b>✨ Generate</b> creates a chart with the ML model: pick level and skill sliders (0–1); with a song loaded it follows the audio. Needs the model file (chartgen.onnx + .json) once — it is cached by the browser afterwards.</li>
+        <li><b>✨ ChartGPT</b> generates charts: pick level and skill sliders (0–1); with a song loaded it follows the audio (Audio strength sets how tightly). Range “Between bookmarks” regenerates only that section of the current chart. The model ships with the editor.</li>
       </ul>
     </div>
   </div>

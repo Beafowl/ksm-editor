@@ -1,12 +1,12 @@
 "use strict";
 /* ============================================================
- * Chart generation: runs the trained ChartGPT model (ONNX) in the
- * browser. Mirrors sdvx_model/tokenizer.py — the vocab construction
- * MUST stay in sync with the Python side.
+ * ChartGPT: in-browser chart generation with the trained model.
+ * Mirrors sdvx_model/tokenizer.py — vocab construction MUST stay
+ * in sync with the Python side.
  *
- * The model file (chartgen.onnx) is user-supplied via a file picker
- * and cached in IndexedDB. The ORT runtime is vendored (vendor/) with
- * its wasm embedded so everything works from file:// URLs.
+ * Model loading order: model/chartgen-model.js (embedded, if present)
+ * -> IndexedDB cache -> file picker. The ORT runtime is vendored
+ * (vendor/) with its wasm embedded so file:// works.
  * ============================================================ */
 
 const GEN = (() => {
@@ -16,7 +16,7 @@ const GEN = (() => {
 const RADAR_AXES = ["notes", "peak", "tsumami", "tricky", "hand-trip", "one-hand"];
 const RADAR_BUCKETS = 11, BPM_BUCKETS = 64;
 const DELTAS = [1, 2, 3, 4, 6, 8, 12, 16, 24, 36, 48, 96];
-const MEASURE = 192, GRID = 12;
+const MEASURE = 192, GRID = 12, WINDOW = 16;
 
 function buildVocab() {
   const v = ["<pad>", "<bos>", "<eos>", "<uncond>"];
@@ -39,8 +39,9 @@ const TID = Object.fromEntries(VOCAB.map((n, i) => [n, i]));
 const PAD = TID["<pad>"], BOS = TID["<bos>"], EOS = TID["<eos>"], UNCOND = TID["<uncond>"];
 const PREFIX_LEN = 9;
 
-// defaults for runs/audio/best.pt; overridden by chartgen.onnx.json if picked
+// model config; overridden by the embedded/picked model's metadata
 let MC = { n_layer: 8, n_head: 6, head_dim: 64, audio_dim: 16, ctx: 2048 };
+const featsPerCell = () => Math.max(1, Math.floor(MC.audio_dim / WINDOW));
 
 const radarBucket = v => Math.max(0, Math.min(10, Math.round(v / 200 * 10)));
 function bpmBucket(bpm) {
@@ -56,12 +57,65 @@ function condTokens(level, radar, bpm) {
   return out;
 }
 
-// token ids -> editor chart model (mirrors tokenizer.decode_body)
-function decodeBody(tokens, bpm) {
+/* -------- encode the current chart (context for range infill) -------- */
+
+function encodeBody(chart) {
+  const ev = []; // [tick, priority, tokens[]]
+  for (let i = 1; i < chart.bpms.length; i++)
+    ev.push([chart.bpms[i].y, 0, [TID.bpmch, TID["bpm_" + bpmBucket(chart.bpms[i].v)]]]);
+  chart.bt.forEach((lane, l) => {
+    for (const n of lane) {
+      if (n.l > 0) {
+        ev.push([n.y, 2, [TID["bt_on_" + l]]]);
+        ev.push([n.y + n.l, 1, [TID["bt_off_" + l]]]);
+      } else ev.push([n.y, 3, [TID["bt_chip_" + l]]]);
+    }
+  });
+  chart.fx.forEach((side, s) => {
+    for (const n of side) {
+      if (n.l > 0) {
+        ev.push([n.y, 2, [TID["fx_on_" + s]]]);
+        ev.push([n.y + n.l, 1, [TID["fx_off_" + s]]]);
+      } else ev.push([n.y, 3, [TID["fx_chip_" + s]]]);
+    }
+  });
+  chart.lasers.forEach((side, s) => {
+    for (const seg of side) {
+      const start = [TID["la_on_" + s]];
+      if (seg.wide === 2) start.push(TID["la_wide_" + s]);
+      ev.push([seg.points[0].y, 4, start]);
+      for (const p of seg.points)
+        ev.push([p.y, 5, [TID["la_v_" + s + "_" + Math.max(0, Math.min(50, Math.round(p.v * 50)))]]]);
+      ev.push([seg.points[seg.points.length - 1].y, 6, [TID["la_off_" + s]]]);
+    }
+  });
+  ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const tokens = [], ticks = [];
+  let pos = 0;
+  for (const [tick, , toks] of ev) {
+    while (pos < tick) {
+      const nb = (Math.floor(pos / MEASURE) + 1) * MEASURE;
+      if (tick >= nb) { pos = nb; tokens.push(TID.bar); }
+      else {
+        let d = DELTAS[0];
+        for (const n of DELTAS) if (n <= tick - pos) d = n;
+        pos += d;
+        tokens.push(TID["d_" + d]);
+      }
+      ticks.push(pos);
+    }
+    for (const t of toks) { tokens.push(t); ticks.push(pos); }
+  }
+  return { tokens, ticks };
+}
+
+/* -------- decode generated tokens -> editor chart objects -------- */
+
+function decodeBody(tokens, bpm, startPos = 0) {
   const chart = KSH.newChart();
   chart.bpms = [{ y: 0, v: bpm }];
   const btOpen = [null, null, null, null], fxOpen = [null, null], laOpen = [null, null];
-  let pos = 0, pendingBpm = false;
+  let pos = startPos, pendingBpm = false;
   for (const t of tokens) {
     const name = VOCAB[t] || "<pad>";
     if (pendingBpm) {
@@ -118,10 +172,10 @@ function decodeBody(tokens, bpm) {
   return chart;
 }
 
-/* -------------------- onsets from loaded audio -------------------- */
+/* -------------------- audio features (v1 + v2) -------------------- */
 
 const N_FFT = 1024, HOP = 512;
-const _twiddle = (() => {
+const _tw = (() => {
   const re = new Float32Array(N_FFT / 2), im = new Float32Array(N_FFT / 2);
   for (let i = 0; i < N_FFT / 2; i++) {
     re[i] = Math.cos(-2 * Math.PI * i / N_FFT);
@@ -130,8 +184,8 @@ const _twiddle = (() => {
   return { re, im };
 })();
 
-function fft1024(re, im) { // in-place iterative radix-2
-  for (let i = 1, j = 0; i < N_FFT; i++) { // bit reversal
+function fft1024(re, im) {
+  for (let i = 1, j = 0; i < N_FFT; i++) {
     let bit = N_FFT >> 1;
     for (; j & bit; bit >>= 1) j ^= bit;
     j ^= bit;
@@ -144,7 +198,7 @@ function fft1024(re, im) { // in-place iterative radix-2
     const step = N_FFT / len;
     for (let i = 0; i < N_FFT; i += len) {
       for (let k = 0; k < len / 2; k++) {
-        const tr = _twiddle.re[k * step], ti = _twiddle.im[k * step];
+        const tr = _tw.re[k * step], ti = _tw.im[k * step];
         const a = i + k, b = i + k + len / 2;
         const xr = re[b] * tr - im[b] * ti, xi = re[b] * ti + im[b] * tr;
         re[b] = re[a] - xr; im[b] = im[a] - xi;
@@ -160,56 +214,74 @@ const _hann = (() => {
   return w;
 })();
 
-// AudioBuffer -> spectral-flux envelope (mirrors sdvx_dataset/onsets.py)
-function onsetEnvelope(buffer) {
-  const n = buffer.length;
+// AudioBuffer -> per-frame features (mirrors sdvx_dataset/onsets.py):
+// bands[3] = clipped log-spectral-flux per band, rms = log loudness, total =
+// broadband flux (the v1 scalar the first model generation was trained on)
+function analyzeAudio(buffer) {
+  const n = buffer.length, sr = buffer.sampleRate;
   const mono = new Float32Array(n);
-  for (let c = 0; c < Math.min(2, buffer.numberOfChannels); c++) {
+  const nc = Math.min(2, buffer.numberOfChannels);
+  for (let c = 0; c < nc; c++) {
     const d = buffer.getChannelData(c);
     for (let i = 0; i < n; i++) mono[i] += d[i];
   }
-  const nc = Math.min(2, buffer.numberOfChannels);
   if (nc > 1) for (let i = 0; i < n; i++) mono[i] /= nc;
   const frames = Math.max(1, 1 + Math.floor((n - N_FFT) / HOP));
-  const flux = new Float32Array(frames);
+  const b1 = Math.ceil(200 * N_FFT / sr), b2 = Math.ceil(2000 * N_FFT / sr);
+  const feats = [new Float32Array(frames), new Float32Array(frames),
+                 new Float32Array(frames), new Float32Array(frames)];
+  const total = new Float32Array(frames);
   const re = new Float32Array(N_FFT), im = new Float32Array(N_FFT);
   let prev = null;
   for (let f = 0; f < frames; f++) {
     const off = f * HOP;
+    let energy = 0;
     for (let i = 0; i < N_FFT; i++) {
-      re[i] = (mono[off + i] || 0) * _hann[i];
+      const s = mono[off + i] || 0;
+      energy += s * s;
+      re[i] = s * _hann[i];
       im[i] = 0;
     }
+    feats[3][f] = Math.log1p(Math.sqrt(energy / N_FFT) * 20);
     fft1024(re, im);
     const mag = new Float32Array(N_FFT / 2 + 1);
-    for (let i = 0; i <= N_FFT / 2; i++)
-      mag[i] = Math.log1p(Math.hypot(re[i], im[i]));
+    for (let i = 0; i <= N_FFT / 2; i++) mag[i] = Math.log1p(Math.hypot(re[i], im[i]));
     if (prev) {
-      let s = 0;
-      for (let i = 0; i < mag.length; i++) {
+      let s0 = 0, s1 = 0, s2 = 0;
+      for (let i = 0; i <= N_FFT / 2; i++) {
         const d = mag[i] - prev[i];
-        if (d > 0) s += d;
+        if (d > 0) { if (i < b1) s0 += d; else if (i < b2) s1 += d; else s2 += d; }
       }
-      flux[f] = s;
+      feats[0][f] = s0; feats[1][f] = s1; feats[2][f] = s2;
+      total[f] = s0 + s1 + s2;
     }
     prev = mag;
   }
-  const sorted = Array.from(flux).sort((a, b) => a - b);
-  const ref = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.98))];
-  if (ref > 0) for (let i = 0; i < frames; i++) flux[i] = Math.min(1, flux[i] / ref);
-  return { env: flux, fps: buffer.sampleRate / HOP };
+  const p98 = a => {
+    const s = Array.from(a).sort((x, y) => x - y);
+    return s[Math.min(s.length - 1, Math.floor(s.length * 0.98))];
+  };
+  for (const a of [...feats, total]) {
+    const ref = p98(a);
+    if (ref > 0) for (let i = 0; i < a.length; i++) a[i] = Math.min(1, a[i] / ref);
+  }
+  return { feats, total, fps: sr / HOP };
 }
 
-// constant-bpm 1/16 grid, max over +-1 frame (mirrors grid_onsets)
-function gridOnsets(envelope, bpm, offsetMs, nCells) {
-  const { env, fps } = envelope;
-  const out = new Float32Array(nCells + MC.audio_dim);
+// -> Float32Array (nCells + WINDOW) * F, layout [cell][feature]
+function gridFeatures(analysis, bpm, offsetMs, nCells) {
+  const F = featsPerCell();
+  const src = F === 1 ? [analysis.total] : analysis.feats.slice(0, F);
+  const out = new Float32Array((nCells + WINDOW) * F);
+  const nFrames = src[0].length;
   for (let c = 0; c < nCells; c++) {
-    const idx = Math.round((offsetMs + c * 15000 / bpm) / 1000 * fps);
-    let m = 0;
-    for (let k = Math.max(0, idx - 1); k <= Math.min(env.length - 1, idx + 1); k++)
-      m = Math.max(m, env[k]);
-    out[c] = m;
+    const idx = Math.round((offsetMs + c * 15000 / bpm) / 1000 * analysis.fps);
+    for (let f = 0; f < F; f++) {
+      let m = 0;
+      for (let k = Math.max(0, idx - 1); k <= Math.min(nFrames - 1, idx + 1); k++)
+        m = Math.max(m, src[f][k]);
+      out[c * F + f] = m;
+    }
   }
   return out;
 }
@@ -217,34 +289,32 @@ function gridOnsets(envelope, bpm, offsetMs, nCells) {
 /* ------------------------- ORT session ------------------------- */
 
 let ortReady = null;
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error(src + " missing"));
+    document.head.appendChild(s);
+  });
+}
 function loadOrt() {
-  if (ortReady) return ortReady;
-  ortReady = new Promise((resolve, reject) => {
-    const s1 = document.createElement("script");
-    s1.src = "vendor/ort.all.min.js";
-    s1.onload = () => {
-      const s2 = document.createElement("script");
-      s2.src = "vendor/ort-embed.js";
-      s2.onload = () => {
+  if (!ortReady)
+    ortReady = loadScript("vendor/ort.all.min.js")
+      .then(() => loadScript("vendor/ort-embed.js"))
+      .then(() => {
         const toBlob = (b64, type) => {
           const bin = atob(b64);
           const u8 = new Uint8Array(bin.length);
           for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
           return URL.createObjectURL(new Blob([u8], { type }));
         };
-        ort.env.wasm.numThreads = 1; // file:// has no cross-origin isolation
+        ort.env.wasm.numThreads = 1;
         ort.env.wasm.wasmPaths = {
           mjs: toBlob(ORT_MJS_B64, "text/javascript"),
           wasm: toBlob(ORT_WASM_B64, "application/wasm"),
         };
-        resolve();
-      };
-      s2.onerror = () => reject(new Error("vendor/ort-embed.js missing"));
-      document.head.appendChild(s2);
-    };
-    s1.onerror = () => reject(new Error("vendor/ort.all.min.js missing"));
-    document.head.appendChild(s1);
-  });
+      });
   return ortReady;
 }
 
@@ -314,34 +384,42 @@ function sampleTopP(logits, temperature, topP) {
   return idx[cut - 1];
 }
 
-async function generate(opts, onProgress) {
-  const { level, radar, bpm, measures, guidance, onsets } = opts;
-  const B = 2, NL = MC.n_layer, NH = MC.n_head, HD = MC.head_dim, A = MC.audio_dim;
-  const cond = [BOS, ...condTokens(level, radar, bpm)];
+/* opts: {level, radar, bpm, guidance, audioGuidance, onsets|null,
+          context: {tokens, ticks} | null, startPos, stopPos, maxTokens,
+          cancelled, onProgress}
+   -> {tokens, startPos} | null on cancel */
+async function generate(opts) {
+  const F = featsPerCell(), A = MC.audio_dim;
+  const NL = MC.n_layer, NH = MC.n_head, HD = MC.head_dim;
+  const haveAudio = !!opts.onsets;
+  const B = haveAudio ? 3 : 2; // rows: cond+audio, uncond-radar, [cond no-audio]
+  const cond = [BOS, ...condTokens(opts.level, opts.radar, opts.bpm)];
   const uncond = [BOS, cond[1], UNCOND, UNCOND, UNCOND, UNCOND, UNCOND, UNCOND, cond[8]];
+
   const window_ = pos => {
     const w = new Float32Array(A);
-    if (onsets) {
-      const c = Math.min(Math.floor(pos / GRID), onsets.length - A - 1);
-      for (let i = 0; i < A; i++) w[i] = onsets[c + i];
+    if (opts.onsets) {
+      const c = Math.min(Math.floor(pos / GRID), opts.onsets.length / F - WINDOW - 1);
+      for (let i = 0; i < A; i++) w[i] = opts.onsets[c * F + i];
     }
     return w;
   };
 
-  const t64 = a => new ort.Tensor("int64", BigInt64Array.from(a.map(BigInt)), [B, a.length / B]);
+  const ctxTokens = opts.context ? opts.context.tokens : [];
+  const ctxTicks = opts.context ? opts.context.ticks : [];
+  const prompt = cond.concat(ctxTokens);
+  const promptTicks = new Array(PREFIX_LEN).fill(opts.startPos && !opts.context ? 0 : 0)
+    .concat(ctxTicks);
+  const S0 = prompt.length;
+
   let past = [];
   for (let i = 0; i < 2 * NL; i++)
     past.push(new ort.Tensor("float32", new Float32Array(0), [B, NH, 0, HD]));
-
-  const feeds = out => {
-    for (let i = 0; i < NL; i++) {
-      past[2 * i] = out["pres_k_" + i];
-      past[2 * i + 1] = out["pres_v_" + i];
-    }
-  };
-  const runStep = async (ids, audioF, mask, S, P) => {
+  const runStep = async (idsPerRow, audioF, mask, S, P) => {
+    const flat = [];
+    for (const row of idsPerRow) flat.push(...row);
     const f = {
-      idx: t64(ids),
+      idx: new ort.Tensor("int64", BigInt64Array.from(flat.map(BigInt)), [B, S]),
       audio: new ort.Tensor("float32", audioF, [B, S, A]),
       mask: new ort.Tensor("float32", mask, [B, 1, S, P + S]),
     };
@@ -349,34 +427,45 @@ async function generate(opts, onProgress) {
       f["past_k_" + i] = past[2 * i];
       f["past_v_" + i] = past[2 * i + 1];
     }
-    return session.run(f);
+    const out = await session.run(f);
+    for (let i = 0; i < NL; i++) {
+      past[2 * i] = out["pres_k_" + i];
+      past[2 * i + 1] = out["pres_v_" + i];
+    }
+    return out;
   };
 
-  // prefill (S = PREFIX_LEN, causal mask)
-  const S0 = PREFIX_LEN;
+  // prefill
   const preMask = new Float32Array(B * S0 * S0);
   for (let b = 0; b < B; b++)
     for (let i = 0; i < S0; i++)
       for (let j = 0; j < S0; j++)
         preMask[(b * S0 + i) * S0 + j] = j <= i ? 0 : -1e9;
   const preAudio = new Float32Array(B * S0 * A);
-  const w0 = window_(0);
-  for (let b = 0; b < B; b++)
-    for (let i = 0; i < S0; i++) preAudio.set(w0, (b * S0 + i) * A);
-  let out = await runStep([...cond, ...uncond], preAudio, preMask, S0, 0);
-  feeds(out);
+  for (let i = 0; i < S0; i++) {
+    const w = window_(promptTicks[i] || 0);
+    for (let b = 0; b < B; b++)
+      if (!(haveAudio && b === 2)) preAudio.set(w, (b * S0 + i) * A);
+  }
+  const promptUncond = uncond.concat(ctxTokens);
+  const rows0 = haveAudio ? [prompt, promptUncond, prompt] : [prompt, promptUncond];
+  let out = await runStep(rows0, preAudio, preMask, S0, 0);
 
   const body = [];
-  let pos = 0, P = S0;
+  let pos = opts.startPos, P = S0;
   const V = VOCAB.length;
+  const gr = opts.guidance, ga = opts.audioGuidance;
   const maxTok = Math.min(opts.maxTokens || 6000, MC.ctx - S0 - 1);
-  while (body.length < maxTok && pos < measures * MEASURE) {
+  while (body.length < maxTok && pos < opts.stopPos) {
     const lg = out.logits.data;
-    const off0 = (0 * out.logits.dims[1] + (out.logits.dims[1] - 1)) * V;
-    const off1 = (1 * out.logits.dims[1] + (out.logits.dims[1] - 1)) * V;
+    const S = out.logits.dims[1];
+    const off = b => (b * S + (S - 1)) * V;
     const mixed = new Float32Array(V);
-    for (let i = 0; i < V; i++)
-      mixed[i] = lg[off1 + i] + guidance * (lg[off0 + i] - lg[off1 + i]);
+    for (let i = 0; i < V; i++) {
+      let x = lg[off(0) + i] + (gr - 1) * (lg[off(0) + i] - lg[off(1) + i]);
+      if (haveAudio) x += (ga - 1) * (lg[off(0) + i] - lg[off(2) + i]);
+      mixed[i] = x;
+    }
     const t = sampleTopP(mixed, 0.95, 0.95);
     if (t === EOS) break;
     if (t !== PAD && t !== BOS) {
@@ -385,22 +474,44 @@ async function generate(opts, onProgress) {
       if (name === "bar") pos = (Math.floor(pos / MEASURE) + 1) * MEASURE;
       else if (name.startsWith("d_")) pos += parseInt(name.slice(2));
     }
-    if (opts.cancelled && opts.cancelled()) return null;
-    if (onProgress && body.length % 25 === 0)
-      onProgress(body.length, Math.floor(pos / MEASURE), measures);
+    if (opts.cancelled()) return null;
+    if (opts.onProgress && body.length % 25 === 0) opts.onProgress(body.length, pos);
     const w = window_(pos);
     const stepAudio = new Float32Array(B * A);
-    stepAudio.set(w, 0); stepAudio.set(w, A);
-    out = await runStep([t, t], stepAudio, new Float32Array(B * (P + 1)), 1, P);
-    feeds(out);
+    for (let b = 0; b < B; b++)
+      if (!(haveAudio && b === 2)) stepAudio.set(w, b * A);
+    out = await runStep(Array.from({ length: B }, () => [t]),
+                        stepAudio, new Float32Array(B * (P + 1)), 1, P);
     P += 1;
   }
-  return body;
+  return { tokens: body };
 }
 
 /* --------------------------- dialog --------------------------- */
 
-let modelBytes = null;
+let modelBytes = null, running = false, cancelFlag = false;
+
+function bookmarks() {
+  return ED.chart.other
+    .filter(o => o.s.startsWith("//bm:"))
+    .map(o => ({ y: o.y, name: o.s.slice(5) || "(unnamed)" }))
+    .sort((a, b) => a.y - b.y);
+}
+
+async function tryEmbeddedModel() {
+  try {
+    await loadScript("model/chartgen-model.js");
+    if (typeof CHARTGEN_ONNX_B64 !== "undefined") {
+      const bin = atob(CHARTGEN_ONNX_B64);
+      const u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      modelBytes = u8.buffer;
+      if (typeof CHARTGEN_META !== "undefined") MC = Object.assign(MC, CHARTGEN_META);
+      return true;
+    }
+  } catch (e) { /* no embedded model shipped */ }
+  return false;
+}
 
 async function open() {
   const d = ED.dom;
@@ -409,19 +520,45 @@ async function open() {
   const hasAudio = !!AudioEng.buffer;
   d.chkGenAudio.disabled = !hasAudio;
   d.chkGenAudio.checked = hasAudio;
-  updateStatus("");
+  const bms = bookmarks();
+  for (const sel of [d.genBmFrom, d.genBmTo]) {
+    sel.innerHTML = "";
+    bms.forEach((b, i) => {
+      const o = document.createElement("option");
+      o.value = i;
+      o.textContent = `#${Math.floor(b.y / MEASURE) + 1} · ${b.name}`;
+      sel.appendChild(o);
+    });
+  }
+  if (bms.length >= 2) d.genBmTo.value = bms.length - 1;
+  d.genRange.querySelector('option[value="bm"]').disabled = bms.length < 2;
+  if (bms.length < 2) d.genRange.value = "all";
+  updateRangeUI();
+
   if (!modelBytes) {
-    const cached = await IDB.get("model").catch(() => null);
-    if (cached) {
-      modelBytes = cached.bytes;
-      if (cached.meta) MC = Object.assign(MC, cached.meta);
-      updateStatus(`model loaded from cache (${(modelBytes.byteLength / 1e6).toFixed(0)} MB)`);
+    updateStatus("loading model ...");
+    if (await tryEmbeddedModel()) {
+      updateStatus(`model ready (embedded, ${(modelBytes.byteLength / 1e6).toFixed(0)} MB)`);
     } else {
-      updateStatus("no model loaded — pick chartgen.onnx (and its .json) below");
+      const cached = await IDB.get("model").catch(() => null);
+      if (cached) {
+        modelBytes = cached.bytes;
+        if (cached.meta) MC = Object.assign(MC, cached.meta);
+        updateStatus(`model ready (cached, ${(modelBytes.byteLength / 1e6).toFixed(0)} MB)`);
+      } else {
+        updateStatus("no model found — pick chartgen.onnx (and its .json) below");
+      }
     }
   } else {
     updateStatus(`model ready (${(modelBytes.byteLength / 1e6).toFixed(0)} MB)`);
   }
+}
+
+function updateRangeUI() {
+  const d = ED.dom;
+  const bm = d.genRange.value === "bm";
+  d.genBmRow.style.display = bm ? "" : "none";
+  d.genMeasuresRow.style.display = bm ? "none" : "";
 }
 
 function updateStatus(msg) { ED.dom.genStatus.textContent = msg; }
@@ -446,66 +583,133 @@ async function pickModel(files) {
   updateStatus(`model ready (${(bytes.byteLength / 1e6).toFixed(0)} MB) — cached for next time`);
 }
 
-let running = false, cancelFlag = false;
+function setRunning(on) {
+  const d = ED.dom;
+  running = on;
+  d.btnGenGo.disabled = on;
+  d.btnGenerate.disabled = on;
+  d.btnGenCancel.style.display = on ? "" : "none";
+}
 
 async function go() {
   const d = ED.dom;
-  if (running) return;
-  if (!modelBytes) { updateStatus("load a model file first"); return; }
-  if (ED.dirty && !confirm("Discard unsaved changes and generate a new chart?")) return;
-  running = true;
+  if (running || !modelBytes) {
+    if (!modelBytes) updateStatus("load a model file first");
+    return;
+  }
+  const rangeMode = d.genRange.value === "bm";
+  if (!rangeMode && ED.dirty && !confirm("Discard unsaved changes and generate a new chart?")) return;
   cancelFlag = false;
-  d.btnGenGo.disabled = true;
+  setRunning(true);
   try {
     updateStatus("starting ONNX session ...");
     await ensureSession(modelBytes);
-    updateStatus(`session ready (${sessionEp}) — generating ...`);
     const bpm = parseFloat(d.genBpm.value) || 170;
-    const measures = Math.max(4, Math.min(128, parseInt(d.genMeasures.value) || 48));
+    const level = parseInt(d.genLevel.value) || 15;
     const radar = {};
     for (const ax of RADAR_AXES)
       radar[ax] = Math.round(parseFloat(d["genS_" + ax].value) * 200);
+
+    // range bounds + context
+    let startPos = 0, stopPos, context = null;
+    if (rangeMode) {
+      const bms = bookmarks();
+      const A = bms[parseInt(d.genBmFrom.value)], Bm = bms[parseInt(d.genBmTo.value)];
+      if (!A || !Bm || Bm.y <= A.y) { updateStatus("pick two bookmarks in order"); return; }
+      startPos = A.y;
+      stopPos = Bm.y;
+      const enc = encodeBody(ED.chart);
+      let cut = enc.tokens.length;
+      for (let i = 0; i < enc.tokens.length; i++)
+        if (enc.ticks[i] >= A.y) { cut = i; break; }
+      const keep = Math.max(0, cut - (MC.ctx - 600)); // leave room to generate
+      context = { tokens: enc.tokens.slice(keep, cut), ticks: enc.ticks.slice(keep, cut) };
+    } else {
+      stopPos = Math.max(4, Math.min(128, parseInt(d.genMeasures.value) || 48)) * MEASURE;
+    }
+
     let onsets = null, offsetMs = 0;
     if (d.chkGenAudio.checked && AudioEng.buffer) {
       updateStatus("analyzing audio ...");
       offsetMs = Math.max(0, Math.round(parseFloat(ED.chart.meta.o) || 0));
-      const env = onsetEnvelope(AudioEng.buffer);
-      onsets = gridOnsets(env, bpm, offsetMs, measures * MEASURE / GRID + 1);
+      const analysis = analyzeAudio(AudioEng.buffer);
+      onsets = gridFeatures(analysis, bpm, offsetMs, Math.ceil(stopPos / GRID) + 1);
     }
+
+    updateStatus(`generating (${sessionEp}) ...`);
     const t0 = performance.now();
-    const body = await generate({
-      level: parseInt(d.genLevel.value) || 15,
-      radar, bpm, measures,
+    const res = await generate({
+      level, radar, bpm,
       guidance: parseFloat(d.genGuidance.value) || 2,
-      onsets,
+      audioGuidance: parseFloat(d.genAudioG.value) || 2.5,
+      onsets, context, startPos, stopPos,
       cancelled: () => cancelFlag,
-    }, (tok, m, total) => updateStatus(`generating ... ${tok} tokens, measure ${m}/${total}`));
-    if (body === null) { updateStatus("cancelled"); return; }
+      onProgress: (tok, pos) =>
+        updateStatus(`generating ... ${tok} tokens, measure ${Math.floor(pos / MEASURE)}/${Math.ceil(stopPos / MEASURE)}`),
+    });
+    if (res === null) { updateStatus("cancelled"); return; }
     const secs = ((performance.now() - t0) / 1000).toFixed(0);
-    const chart = decodeBody(body, bpm);
-    const m = chart.meta;
-    m.title = "Generated lv" + d.genLevel.value;
-    m.artist = "ChartGPT";
-    m.effect = "ChartGPT";
-    m.difficulty = "infinite";
-    m.level = String(parseInt(d.genLevel.value) || 15);
-    if (d.chkGenAudio.checked && AudioEng.buffer) {
-      m.m = ED.chart.meta.m; // keep the loaded song hooked up
-      m.o = String(offsetMs);
+    const gen = decodeBody(res.tokens, bpm, startPos);
+
+    if (rangeMode) {
+      applyRange(gen, startPos, stopPos);
+      d.genModal.close();
+      toast(`Regenerated measures ${Math.floor(startPos / MEASURE) + 1}-${Math.floor(stopPos / MEASURE) + 1} in ${secs}s (${sessionEp})`);
+    } else {
+      const m = gen.meta;
+      m.title = "Generated lv" + level;
+      m.artist = "ChartGPT";
+      m.effect = "ChartGPT";
+      m.difficulty = "infinite";
+      m.level = String(level);
+      if (d.chkGenAudio.checked && AudioEng.buffer) {
+        m.m = ED.chart.meta.m;
+        m.o = String(offsetMs);
+      }
+      setChart(gen);
+      ED.kshHandle = null;
+      ED.kshName = "";
+      ED.dirty = true;
+      updateTitle();
+      d.genModal.close();
+      toast(`Generated ${sumNotes(gen)} notes in ${secs}s (${sessionEp}) — review and save`);
     }
-    setChart(chart);
-    ED.kshHandle = null;
-    ED.kshName = "";
-    ED.dirty = true;
-    updateTitle();
-    d.genModal.close();
-    toast(`Generated ${sumNotes(chart)} notes in ${secs}s (${sessionEp}) — review and save`);
   } catch (e) {
     updateStatus("failed: " + e.message);
   } finally {
-    running = false;
-    d.btnGenGo.disabled = false;
+    setRunning(false);
   }
+}
+
+// splice generated objects into [A, B) of the current chart (undoable)
+function applyRange(gen, A, B) {
+  pushUndo();
+  const inRange = y => y >= A && y < B;
+  for (let l = 0; l < 4; l++) {
+    ED.chart.bt[l] = ED.chart.bt[l].filter(n => !inRange(n.y));
+    for (const n of gen.bt[l]) if (inRange(n.y)) {
+      n.l = Math.min(n.l, Math.max(0, B - n.y));
+      ED.chart.bt[l].push(n);
+    }
+    ED.chart.bt[l].sort((a, b) => a.y - b.y);
+  }
+  for (let s = 0; s < 2; s++) {
+    ED.chart.fx[s] = ED.chart.fx[s].filter(n => !inRange(n.y));
+    for (const n of gen.fx[s]) if (inRange(n.y)) {
+      n.l = Math.min(n.l, Math.max(0, B - n.y));
+      ED.chart.fx[s].push(n);
+    }
+    ED.chart.fx[s].sort((a, b) => a.y - b.y);
+    ED.chart.lasers[s] = ED.chart.lasers[s].filter(g => !inRange(g.points[0].y));
+    for (const g of gen.lasers[s]) {
+      if (!inRange(g.points[0].y)) continue;
+      g.points = g.points.filter(p => p.y < B);
+      if (g.points.length >= 2) ED.chart.lasers[s].push(g);
+    }
+    ED.chart.lasers[s].sort((a, b) => a.points[0].y - b.points[0].y);
+  }
+  setSel(null);
+  markEdit();
 }
 
 function sumNotes(chart) {
@@ -517,7 +721,9 @@ function init() {
   d.btnGenerate.addEventListener("click", open);
   d.genModal.addEventListener("close", () => { cancelFlag = true; });
   d.btnGenClose.addEventListener("click", () => { cancelFlag = true; d.genModal.close(); });
+  d.btnGenCancel.addEventListener("click", () => { cancelFlag = true; });
   d.btnGenGo.addEventListener("click", go);
+  d.genRange.addEventListener("change", updateRangeUI);
   d.genModelFile.addEventListener("change", () => pickModel([...d.genModelFile.files]));
   for (const ax of RADAR_AXES) {
     const slider = d["genS_" + ax];
