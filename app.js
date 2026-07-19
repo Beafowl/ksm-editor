@@ -348,8 +348,10 @@ function onHighwayDown(e) {
     const wasInGroup = hit && ED.selList.some(s => sameSel(s, hit));
     setSel(hit, add);
     if (!hit) {
-      // drag on empty space: rubber-band selection (shift adds to the selection)
-      ED.drag = { mode: "rubber", x0: x, y0: y, add };
+      // drag on empty space: rubber-band selection (shift adds to the selection).
+      // The anchor is kept as a tick so the border follows the chart when
+      // scrolling mid-drag.
+      ED.drag = { mode: "rubber", x0: x, y0: y, t0: (ED.G || Render.geom()).tickOfY(y), add };
       return;
     }
     if (add) return; // shift-click only toggles membership
@@ -424,7 +426,7 @@ function onHighwayMove(e) {
 
   if (d.mode === "rubber") {
     d.x1 = x; d.y1 = y;
-    ED.rubber = { x0: d.x0, y0: d.y0, x1: x, y1: y };
+    ED.rubber = { x0: d.x0, t0: d.t0, x1: x, y1: y };
   } else if (d.mode === "placeNote") {
     d.note.l = Math.max(0, snapTick(G.tickOfY(y)) - d.startTick);
   } else if (d.mode === "moveNote") {
@@ -471,9 +473,11 @@ function onHighwayUp() {
   ED.drag = null;
   if (d.mode === "rubber") {
     ED.rubber = null;
-    if (d.x1 === undefined || (Math.abs(d.x1 - d.x0) < 3 && Math.abs(d.y1 - d.y0) < 3))
+    if (d.x1 === undefined ||
+        (!d.scrolled && Math.abs(d.x1 - d.x0) < 3 && Math.abs(d.y1 - d.y0) < 3))
       return; // was just a click on empty space
-    rubberSelect(d.x0, d.y0, d.x1, d.y1, d.add);
+    const G = ED.G || Render.geom();
+    rubberSelect(d.x0, G.yOfTick(d.t0), d.x1, d.y1, d.add);
   } else if (d.mode === "placeNote") {
     cleanupOverlaps(d.arr, d.note);
     markEdit(); updateInspector();
@@ -525,6 +529,15 @@ function onHighwayWheel(e) {
     setEditorSpeed(ED.edSpeed * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
   } else {
     seekBySnap(e.deltaY < 0 ? 1 : -1);
+  }
+  // scrolling while rubber-band dragging extends the band even if the
+  // mouse itself doesn't move (the anchor is tick-based, the cursor edge
+  // stays put on screen and sweeps over the chart)
+  const d = ED.drag;
+  if (d && d.mode === "rubber") {
+    if (d.x1 === undefined) { d.x1 = d.x0; d.y1 = d.y0; }
+    d.scrolled = true;
+    ED.rubber = { x0: d.x0, t0: d.t0, x1: d.x1, y1: d.y1 };
   }
 }
 

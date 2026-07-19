@@ -313,8 +313,9 @@ function drawHighway() {
   drawHover(ctx, G);
   if (ED.rubber) {
     const r = ED.rubber;
-    const x = Math.min(r.x0, r.x1), y = Math.min(r.y0, r.y1);
-    const w = Math.abs(r.x1 - r.x0), h = Math.abs(r.y1 - r.y0);
+    const ry0 = G.yOfTick(r.t0); // tick-anchored: follows the chart when scrolling
+    const x = Math.min(r.x0, r.x1), y = Math.min(ry0, r.y1);
+    const w = Math.abs(r.x1 - r.x0), h = Math.abs(r.y1 - ry0);
     ctx.fillStyle = "rgba(51,204,255,0.10)";
     ctx.strokeStyle = "rgba(51,204,255,0.65)";
     ctx.lineWidth = 1;
