@@ -346,43 +346,6 @@ function gridFeatures(analysis, bpm, offsetMs, nCells) {
   return out;
 }
 
-/* ---------------- fp16 helpers (full-fp16 exported models) ---------------- */
-
-const _f32buf = new Float32Array(1), _u32buf = new Uint32Array(_f32buf.buffer);
-function f32ToF16(x) {
-  _f32buf[0] = x;
-  const u = _u32buf[0];
-  const sign = (u >>> 16) & 0x8000;
-  const exp = (u >>> 23) & 0xff, man = u & 0x7fffff;
-  if (exp === 255) return sign | 0x7c00 | (man ? 1 : 0);
-  const e = exp - 127 + 15;
-  if (e >= 31) return sign | 0x7c00;
-  if (e <= 0) {
-    if (e < -10) return sign;
-    return sign | (((man | 0x800000) >>> (1 - e)) >>> 13);
-  }
-  return sign | (e << 10) | (man >>> 13);
-}
-function f16ToF32(h) {
-  const sign = (h & 0x8000) << 16;
-  let exp = (h >>> 10) & 0x1f, man = h & 0x3ff;
-  if (exp === 0) {
-    if (!man) { _u32buf[0] = sign; return _f32buf[0]; }
-    while (!(man & 0x400)) { man <<= 1; exp--; }
-    exp++; man &= 0x3ff;
-  } else if (exp === 31) {
-    _u32buf[0] = sign | 0x7f800000 | (man << 13);
-    return _f32buf[0];
-  }
-  _u32buf[0] = sign | ((exp - 15 + 127) << 23) | (man << 13);
-  return _f32buf[0];
-}
-function toHalfArray(f32) {
-  const u = new Uint16Array(f32.length);
-  for (let i = 0; i < f32.length; i++) u[i] = f32ToF16(f32[i]);
-  return u;
-}
-
 /* ------------------------- ORT session ------------------------- */
 
 let ortReady = null;
@@ -539,8 +502,10 @@ async function generate(opts) {
     return w;
   };
 
+  if (MC.fp16 && typeof Float16Array === "undefined")
+    throw new Error("this browser lacks Float16Array (needed by the model) — update Chrome");
   const FT = MC.fp16 ? "float16" : "float32";
-  const mkF = (arr, dims) => new ort.Tensor(FT, MC.fp16 ? toHalfArray(arr) : arr, dims);
+  const mkF = (arr, dims) => new ort.Tensor(FT, MC.fp16 ? Float16Array.from(arr) : arr, dims);
   let past = [];
   const runStep = async (idsPerRow, audioF, mask, S, P) => {
     const flat = [];
@@ -565,7 +530,7 @@ async function generate(opts) {
   const prefill = async (tailTokens, tailTicks) => {
     past = [];
     for (let i = 0; i < 2 * NL; i++)
-      past.push(new ort.Tensor(FT, MC.fp16 ? new Uint16Array(0) : new Float32Array(0),
+      past.push(new ort.Tensor(FT, MC.fp16 ? new Float16Array(0) : new Float32Array(0),
                                [B, NH, 0, HD]));
     const rowsC = cond.concat(tailTokens);
     const rowsU = uncond.concat(tailTokens);
@@ -606,8 +571,7 @@ async function generate(opts) {
     const res = new Float32Array(B * V);
     for (let b = 0; b < B; b++) {
       const start = (b * S + (S - 1)) * V;
-      for (let i = 0; i < V; i++)
-        res[b * V + i] = MC.fp16 ? f16ToF32(data[start + i]) : data[start + i];
+      for (let i = 0; i < V; i++) res[b * V + i] = data[start + i];
     }
     return res;
   };
