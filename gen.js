@@ -32,16 +32,19 @@ function buildVocab() {
     for (let i = 0; i <= 50; i++) v.push("la_v_" + s + "_" + i);
   }
   v.push("bpmch");
+  for (let i = 0; i < 100; i++) v.push("eff_" + i); // effector-style slots (v5)
   return v;
 }
 const VOCAB = buildVocab();
 const TID = Object.fromEntries(VOCAB.map((n, i) => [n, i]));
 const PAD = TID["<pad>"], BOS = TID["<bos>"], EOS = TID["<eos>"], UNCOND = TID["<uncond>"];
-const PREFIX_LEN = 9;
 
 // model config; overridden by the embedded/picked model's metadata
-let MC = { n_layer: 8, n_head: 6, head_dim: 64, audio_dim: 16, ctx: 2048, mel_bins: 0, fp16: false };
+let MC = { n_layer: 8, n_head: 6, head_dim: 64, audio_dim: 16, ctx: 2048, mel_bins: 0,
+           fp16: false, prefix_len: 9, enc_embd: 0, max_cells: 4096, eff_names: [],
+           model_cfg: null };
 const featsPerCell = () => MC.mel_bins || Math.max(1, Math.floor(MC.audio_dim / WINDOW));
+const isV5 = () => !!(MC.model_cfg && MC.model_cfg.enc_layer);
 
 const radarBucket = v => Math.max(0, Math.min(10, Math.round(v / 200 * 10)));
 function bpmBucket(bpm) {
@@ -49,11 +52,13 @@ function bpmBucket(bpm) {
   const x = (Math.log2(bpm) - Math.log2(50)) / (Math.log2(400) - Math.log2(50));
   return Math.max(0, Math.min(BPM_BUCKETS - 1, Math.round(x * (BPM_BUCKETS - 1))));
 }
-function condTokens(level, radar, bpm) {
+function condTokens(level, radar, bpm, styleId) {
   const lv = Math.max(1, Math.min(20, Math.round(level) || 1));
   const out = [TID["lv_" + lv]];
   for (const ax of RADAR_AXES) out.push(TID[ax + "_" + radarBucket(radar[ax])]);
   out.push(TID["bpm_" + bpmBucket(bpm)]);
+  if (MC.prefix_len >= 10) // v5 prefix carries an effector-style slot
+    out.push(styleId != null && styleId >= 0 ? TID["eff_" + styleId] : UNCOND);
   return out;
 }
 
@@ -378,16 +383,18 @@ function loadOrt() {
   return ortReady;
 }
 
-let session = null, sessionEp = "";
-async function ensureSession(modelBytes) {
+let session = null, encSession = null, sessionEp = "";
+async function ensureSession(modelBytes, encBytes) {
   if (session) return session;
   await loadOrt();
   for (const eps of [["webgpu"], ["wasm"]]) {
     try {
       session = await ort.InferenceSession.create(modelBytes, { executionProviders: eps });
+      if (encBytes)
+        encSession = await ort.InferenceSession.create(encBytes, { executionProviders: eps });
       sessionEp = eps[0];
       return session;
-    } catch (e) { /* try next provider */ }
+    } catch (e) { session = null; encSession = null; /* try next provider */ }
   }
   throw new Error("could not create ONNX session");
 }
@@ -465,7 +472,8 @@ const SHAPER_DEFAULTS = { emphasis: 1.0, chord: 0.8, pattern: 1.0, drought: 1.2 
 
 
 function tokenMask(st, rangeMode, pos, stopPos) {
-  const banned = new Set([PAD, BOS]);
+  const banned = new Set([PAD, BOS, UNCOND]);
+  for (let i = 0; i < 100; i++) banned.add(TID["eff_" + i]); // prefix-only tokens
   if (rangeMode) { banned.add(EOS); banned.add(TID.bpmch); }
   else if (pos < stopPos * 0.75) banned.add(EOS);
   for (let l = 0; l < 4; l++) {
@@ -507,8 +515,11 @@ async function generate(opts) {
   const NL = MC.n_layer, NH = MC.n_head, HD = MC.head_dim;
   const haveAudio = !!opts.onsets;
   const B = haveAudio ? 3 : 2; // rows: cond+audio, uncond-radar, [cond no-audio]
-  const cond = [BOS, ...condTokens(opts.level, opts.radar, opts.bpm)];
+  const v5 = isV5();
+  const cond = [BOS, ...condTokens(opts.level, opts.radar, opts.bpm, opts.styleId)];
   const uncond = [BOS, cond[1], UNCOND, UNCOND, UNCOND, UNCOND, UNCOND, UNCOND, cond[8]];
+  if (v5) uncond.push(UNCOND); // effector slot
+  const PL = cond.length;
   const CHUNK_TAIL = 900; // recent tokens carried over when re-priming
 
   const window_ = pos => {
@@ -524,15 +535,47 @@ async function generate(opts) {
     throw new Error("this browser lacks Float16Array (needed by the model) — update Chrome");
   const FT = MC.fp16 ? "float16" : "float32";
   const mkF = (arr, dims) => new ort.Tensor(FT, MC.fp16 ? Float16Array.from(arr) : arr, dims);
+
+  // v5: run the audio encoder once over the whole song's mel cells, then
+  // hand the decoder that memory plus per-token cell indices
+  let memTensor = null, nMem = 1;
+  const cellOf = pos =>
+    Math.max(0, Math.min(nMem - 1, Math.floor(pos / GRID)));
+  if (v5) {
+    const E = MC.enc_embd;
+    if (haveAudio) {
+      nMem = Math.min(Math.floor(opts.onsets.length / F), MC.max_cells);
+      const mel = mkF(opts.onsets.subarray(0, nMem * F), [1, nMem, F]);
+      const enc = await encSession.run({ mel: mel });
+      const m1 = enc.memory.data; // (1,N,E)
+      const memB = MC.fp16 ? new Float16Array(B * nMem * E) : new Float32Array(B * nMem * E);
+      memB.set(m1, 0);
+      memB.set(m1, nMem * E); // uncond-radar row still hears the song
+      // row 2 (cond, no audio) stays zero: the learned null read
+      memTensor = new ort.Tensor(FT, memB, [B, nMem, E]);
+    } else {
+      memTensor = new ort.Tensor(
+        FT, MC.fp16 ? new Float16Array(B * E) : new Float32Array(B * E), [B, 1, E]);
+    }
+  }
+
   let past = [];
-  const runStep = async (idsPerRow, audioF, mask, S, P) => {
+  const runStep = async (idsPerRow, audioF, mask, S, P, cellsArr) => {
     const flat = [];
     for (const row of idsPerRow) flat.push(...row);
     const f = {
       idx: new ort.Tensor("int64", BigInt64Array.from(flat.map(BigInt)), [B, S]),
-      audio: mkF(audioF, [B, S, A]),
       mask: mkF(mask, [B, 1, S, P + S]),
     };
+    if (v5) {
+      f.memory = memTensor;
+      const cf = new BigInt64Array(B * S);
+      for (let b = 0; b < B; b++)
+        for (let i = 0; i < S; i++) cf[b * S + i] = BigInt(cellsArr[i]);
+      f.cells = new ort.Tensor("int64", cf, [B, S]);
+    } else {
+      f.audio = mkF(audioF, [B, S, A]);
+    }
     for (let i = 0; i < NL; i++) {
       f["past_k_" + i] = past[2 * i];
       f["past_v_" + i] = past[2 * i + 1];
@@ -558,14 +601,21 @@ async function generate(opts) {
       for (let i = 0; i < S0; i++)
         for (let j = 0; j < S0; j++)
           mask[(b * S0 + i) * S0 + j] = j <= i ? 0 : -1e9;
-    const audio = new Float32Array(B * S0 * A);
-    for (let i = 0; i < S0; i++) {
-      const w = window_(i < PREFIX_LEN ? 0 : tailTicks[i - PREFIX_LEN]);
-      for (let b = 0; b < B; b++)
-        if (!(haveAudio && b === 2)) audio.set(w, (b * S0 + i) * A);
+    let audio = null, cellsArr = null;
+    if (v5) {
+      cellsArr = new Array(S0);
+      for (let i = 0; i < S0; i++)
+        cellsArr[i] = i < PL ? 0 : cellOf(tailTicks[i - PL]);
+    } else {
+      audio = new Float32Array(B * S0 * A);
+      for (let i = 0; i < S0; i++) {
+        const w = window_(i < PL ? 0 : tailTicks[i - PL]);
+        for (let b = 0; b < B; b++)
+          if (!(haveAudio && b === 2)) audio.set(w, (b * S0 + i) * A);
+      }
     }
     const rows = haveAudio ? [rowsC, rowsU, rowsC] : [rowsC, rowsU];
-    const out = await runStep(rows, audio, mask, S0, 0);
+    const out = await runStep(rows, audio, mask, S0, 0, cellsArr);
     return { out, S0 };
   };
 
@@ -639,7 +689,7 @@ async function generate(opts) {
   let P = S0;
   const body = [], bodyTicks = [];
   let pos = opts.startPos;
-  const V = VOCAB.length;
+  const V = out.logits.dims[2]; // the model's logit width (v4: 294, v5: 394)
   const gr = opts.guidance, ga = opts.audioGuidance;
   const maxTok = opts.maxTokens || 20000;
   const rangeMode = !!opts.context;
@@ -688,12 +738,17 @@ async function generate(opts) {
       P = S0;
       continue;
     }
-    const w = window_(pos);
-    const stepAudio = new Float32Array(B * A);
-    for (let b = 0; b < B; b++)
-      if (!(haveAudio && b === 2)) stepAudio.set(w, b * A);
+    let stepAudio = null, stepCells = null;
+    if (v5) {
+      stepCells = [cellOf(pos)];
+    } else {
+      const w = window_(pos);
+      stepAudio = new Float32Array(B * A);
+      for (let b = 0; b < B; b++)
+        if (!(haveAudio && b === 2)) stepAudio.set(w, b * A);
+    }
     out = await runStep(Array.from({ length: B }, () => [t]),
-                        stepAudio, new Float32Array(B * (P + 1)), 1, P);
+                        stepAudio, new Float32Array(B * (P + 1)), 1, P, stepCells);
     P += 1;
   }
   return { tokens: body };
@@ -701,7 +756,7 @@ async function generate(opts) {
 
 /* --------------------------- dialog --------------------------- */
 
-let modelBytes = null, running = false, cancelFlag = false;
+let modelBytes = null, encModelBytes = null, running = false, cancelFlag = false;
 
 function bookmarks() {
   return ED.chart.other
@@ -714,10 +769,15 @@ async function tryEmbeddedModel() {
   try {
     await loadScript("model/chartgen-model.js");
     if (typeof CHARTGEN_ONNX_B64 !== "undefined") {
-      const bin = atob(CHARTGEN_ONNX_B64);
-      const u8 = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-      modelBytes = u8.buffer;
+      const toBytes = b64 => {
+        const bin = atob(b64);
+        const u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        return u8.buffer;
+      };
+      modelBytes = toBytes(CHARTGEN_ONNX_B64);
+      if (typeof CHARTGEN_ENC_B64 !== "undefined")
+        encModelBytes = toBytes(CHARTGEN_ENC_B64); // v5 audio encoder graph
       if (typeof CHARTGEN_META !== "undefined") MC = Object.assign(MC, CHARTGEN_META);
       return true;
     }
@@ -757,6 +817,22 @@ async function open() {
   } else {
     updateStatus(`model ready (${(modelBytes.byteLength / 1e6).toFixed(0)} MB)`);
   }
+  // effector-style picker (v5 models only)
+  const names = MC.eff_names || [];
+  d.genStyleRow.style.display = names.length ? "" : "none";
+  if (names.length && d.genStyle.options.length !== names.length + 1) {
+    d.genStyle.innerHTML = "";
+    const any = document.createElement("option");
+    any.value = "-1";
+    any.textContent = "Any";
+    d.genStyle.appendChild(any);
+    names.forEach((n, i) => {
+      const o = document.createElement("option");
+      o.value = i;
+      o.textContent = n;
+      d.genStyle.appendChild(o);
+    });
+  }
 }
 
 function updateRangeUI() {
@@ -788,7 +864,7 @@ async function go() {
   setRunning(true);
   try {
     updateStatus("starting ONNX session ...");
-    await ensureSession(modelBytes);
+    await ensureSession(modelBytes, encModelBytes);
     const bpm = parseFloat(d.genBpm.value) || 170;
     const level = parseInt(d.genLevel.value) || 15;
     const radar = {};
@@ -823,8 +899,10 @@ async function go() {
 
     updateStatus(`generating (${sessionEp}) ...`);
     const t0 = performance.now();
+    const styleId = (MC.eff_names || []).length ? parseInt(d.genStyle.value) : -1;
     const res = await generate({
       level, radar, bpm,
+      styleId: styleId >= 0 ? styleId : null,
       guidance: Math.max(1, Math.min(3, parseFloat(d.genGuidance.value) || 2)),
       audioGuidance: Math.max(1, Math.min(3, parseFloat(d.genAudioG.value) || 2.5)),
       onsets, context, startPos, stopPos,
