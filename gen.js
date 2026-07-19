@@ -445,6 +445,24 @@ const ZONE = [
   ["bt_chip_2", "bt_on_2", "bt_chip_3", "bt_on_3", "fx_chip_1", "fx_on_1"],
 ];
 const ALL_NOTE_STARTS = ZONE[0].concat(ZONE[1]);
+const NOTE_START_IDS = ALL_NOTE_STARTS.map(n => TID[n]);
+// lane ids for pattern tracking: BT 0-3, FX -> 4/5
+const laneOfToken = t => {
+  const n = VOCAB[t] || "";
+  if (n.startsWith("bt_chip_") || n.startsWith("bt_on_")) return +n.slice(-1);
+  if (n.startsWith("fx_chip_") || n.startsWith("fx_on_")) return 4 + (+n.slice(-1));
+  return -1;
+};
+const laneStartIds = k => k < 4
+  ? [TID["bt_chip_" + k], TID["bt_on_" + k]]
+  : [TID["fx_chip_" + (k - 4)], TID["fx_on_" + (k - 4)]];
+
+/* Sampling shapers: push accents toward chords, stabilize lane patterns
+   (trills/stairs), and prevent button droughts while the music plays.
+   Tunable from the console via window.GEN_TUNING = {emphasis, chord,
+   pattern, drought} (logit units; 0 disables a shaper). */
+const SHAPER_DEFAULTS = { emphasis: 1.0, chord: 0.8, pattern: 1.0, drought: 1.2 };
+
 
 function tokenMask(st, rangeMode, pos, stopPos) {
   const banned = new Set([PAD, BOS]);
@@ -557,6 +575,66 @@ async function generate(opts) {
   for (const t of ctxTokens) stateStep(st, t); // seed holds/lasers crossing the boundary
   st.tickNotes = 0;
 
+  // --- sampling shapers ---
+  const TUNE = Object.assign({}, SHAPER_DEFAULTS,
+    (typeof window !== "undefined" && window.GEN_TUNING) || {});
+  let energyRank = null;
+  if (opts.onsets) {
+    const nC = Math.floor(opts.onsets.length / F);
+    const en = new Float32Array(nC);
+    for (let c = 0; c < nC; c++) {
+      let acc = 0;
+      for (let f = 0; f < F; f++) acc += opts.onsets[c * F + f];
+      en[c] = acc / F;
+    }
+    const sorted = Float32Array.from(en).sort();
+    energyRank = c => {
+      const v = en[Math.min(c, en.length - 1)];
+      let lo = 0, hi = sorted.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] <= v) lo = mid + 1; else hi = mid; }
+      return lo / sorted.length;
+    };
+  }
+  let lastButtonPos = opts.startPos;
+  const recentLanes = [];
+  for (let i = 0; i < ctxTokens.length; i++) {
+    const k = laneOfToken(ctxTokens[i]);
+    if (k >= 0) { lastButtonPos = ctxTicks[i]; recentLanes.push(k); }
+  }
+  if (recentLanes.length > 12) recentLanes.splice(0, recentLanes.length - 12);
+
+  const shapeLogits = mixed => {
+    const r = energyRank ? energyRank(Math.floor(pos / GRID)) : 0.5;
+    if (r > 0.75) { // accent: notes, and chords on top of a placed note
+      const a = (r - 0.75) / 0.25;
+      const bonus = TUNE.emphasis * a + (st.tickNotes >= 1 ? TUNE.chord * a : 0);
+      for (const t of NOTE_START_IDS) mixed[t] += bonus;
+    }
+    // avoid long button droughts: always on, but weaker in quiet sections
+    // so breaks stay sparse; an active laser counts as full-strength music
+    {
+      const gap = pos - lastButtonPos;
+      if (gap > MEASURE) {
+        const w = (st.laOpen[0] || st.laOpen[1]) ? 1 : Math.max(0.4, r);
+        for (const t of NOTE_START_IDS)
+          mixed[t] += Math.min(3, (gap - MEASURE) / MEASURE) * TUNE.drought * w;
+      }
+    }
+    // pattern induction: continue an established lane cycle (trill/stair/...)
+    const L = recentLanes.length;
+    for (const p of [2, 3, 4, 1]) {
+      if (L < 2 * p) continue;
+      let ok = true;
+      for (let i = L - p; i < L; i++)
+        if (recentLanes[i] !== recentLanes[i - p]) { ok = false; break; }
+      if (ok) {
+        for (const t of laneStartIds(recentLanes[L - p]))
+          mixed[t] += TUNE.pattern * (p === 1 ? 0.5 : 1);
+        break;
+      }
+    }
+  };
+
   let { out, S0 } = await prefill(ctxTokens, ctxTicks);
   let P = S0;
   const body = [], bodyTicks = [];
@@ -584,10 +662,17 @@ async function generate(opts) {
       if (haveAudio) x += (ga - 1) * (lg[off(0) + i] - lg[off(2) + i]);
       mixed[i] = x;
     }
+    shapeLogits(mixed);
     const t = sampleTopP(mixed, 0.95, 0.95, tokenMask(st, rangeMode, pos, opts.stopPos));
     if (t === EOS) break;
     body.push(t);
     stateStep(st, t);
+    const laneK = laneOfToken(t);
+    if (laneK >= 0) {
+      lastButtonPos = pos;
+      recentLanes.push(laneK);
+      if (recentLanes.length > 12) recentLanes.shift();
+    }
     const name = VOCAB[t];
     if (name === "bar") pos = (Math.floor(pos / MEASURE) + 1) * MEASURE;
     else if (name.startsWith("d_")) pos += parseInt(name.slice(2));
