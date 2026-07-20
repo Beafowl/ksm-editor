@@ -872,12 +872,12 @@ async function go() {
       radar[ax] = Math.round(parseFloat(d["genS_" + ax].value) * 200);
 
     // range bounds + context
-    let startPos = 0, stopPos, context = null;
+    let startPos = 0, stopPos, context = null, rangeA = 0, rangeB = 0;
     if (rangeMode) {
       const bms = bookmarks();
       const A = bms[parseInt(d.genBmFrom.value)], Bm = bms[parseInt(d.genBmTo.value)];
       if (!A || !Bm || Bm.y <= A.y) { updateStatus("pick two bookmarks in order"); return; }
-      startPos = A.y;
+      rangeA = A.y;
       stopPos = Bm.y;
       const enc = encodeBody(ED.chart);
       let cut = enc.tokens.length;
@@ -885,6 +885,12 @@ async function go() {
         if (enc.ticks[i] >= A.y) { cut = i; break; }
       const keep = Math.max(0, cut - (MC.ctx - 600)); // leave room to generate
       context = { tokens: enc.tokens.slice(keep, cut), ticks: enc.ticks.slice(keep, cut) };
+      // continue from the context's true end tick (before A), not A itself:
+      // the model's first token is usually a bar reaching A, so starting at A
+      // would overshoot and leave the first measure empty. Events the model
+      // places before A are discarded by applyRange's [A,B) filter.
+      startPos = cut > 0 ? enc.ticks[cut - 1] : 0;
+      rangeB = stopPos;
     } else {
       stopPos = Math.max(4, Math.min(128, parseInt(d.genMeasures.value) || 48)) * MEASURE;
     }
@@ -915,9 +921,9 @@ async function go() {
     const gen = decodeBody(res.tokens, bpm, startPos);
 
     if (rangeMode) {
-      applyRange(gen, startPos, stopPos);
+      applyRange(gen, rangeA, rangeB);
       d.genModal.close();
-      toast(`Regenerated measures ${Math.floor(startPos / MEASURE) + 1}-${Math.floor(stopPos / MEASURE) + 1} in ${secs}s (${sessionEp})`);
+      toast(`Regenerated measures ${Math.floor(rangeA / MEASURE) + 1}-${Math.floor(rangeB / MEASURE) + 1} in ${secs}s (${sessionEp})`);
     } else {
       const m = gen.meta;
       m.title = "Generated lv" + level;
