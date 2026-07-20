@@ -468,7 +468,8 @@ const laneStartIds = k => k < 4
    (trills/stairs), and prevent button droughts while the music plays.
    Tunable from the console via window.GEN_TUNING = {emphasis, chord,
    pattern, drought} (logit units; 0 disables a shaper). */
-const SHAPER_DEFAULTS = { emphasis: 1.0, chord: 0.8, pattern: 1.0, drought: 1.2 };
+const SHAPER_DEFAULTS = { emphasis: 1.3, chord: 0.6, chordPenalty: 1.4,
+                          pattern: 0.8, drought: 1.2, stair: 2.2, stream: 1.8 };
 
 
 function tokenMask(st, rangeMode, pos, stopPos) {
@@ -647,18 +648,47 @@ async function generate(opts) {
   }
   let lastButtonPos = opts.startPos;
   const recentLanes = [];
+  // stream tracking: even spacing between successive note-ticks -> long runs
+  const STREAM_GAPS = new Set([6, 8, 12, 16, 24]);
+  let lastNotePos = -1, lastGap = 0, streamGap = 0;
   for (let i = 0; i < ctxTokens.length; i++) {
     const k = laneOfToken(ctxTokens[i]);
-    if (k >= 0) { lastButtonPos = ctxTicks[i]; recentLanes.push(k); }
+    if (k >= 0) {
+      lastButtonPos = ctxTicks[i];
+      recentLanes.push(k);
+      if (lastNotePos >= 0 && ctxTicks[i] > lastNotePos) {
+        const g = ctxTicks[i] - lastNotePos;
+        streamGap = (g === lastGap && STREAM_GAPS.has(g)) ? g : 0;
+        lastGap = g;
+      }
+      if (ctxTicks[i] !== lastNotePos) lastNotePos = ctxTicks[i];
+    }
   }
   if (recentLanes.length > 12) recentLanes.splice(0, recentLanes.length - 12);
 
   const shapeLogits = mixed => {
     const r = energyRank ? energyRank(Math.floor(pos / GRID)) : 0.5;
-    if (r > 0.75) { // accent: notes, and chords on top of a placed note
-      const a = (r - 0.75) / 0.25;
-      const bonus = TUNE.emphasis * a + (st.tickNotes >= 1 ? TUNE.chord * a : 0);
-      for (const t of NOTE_START_IDS) mixed[t] += bonus;
+    // Texture: real charts are single-note-dominant (~80%) with occasional
+    // 2-chords on accents and almost no 3-4 stacks. So add density as SINGLE
+    // notes on strong cells, allow a 2nd note only at the loudest moments,
+    // and suppress 3rd+ notes — this is what makes patterns (single-note
+    // streams) emerge instead of a wall of chords.
+    if (st.tickNotes === 0) {
+      if (r > 0.6) // accent: place a note here
+        for (const t of NOTE_START_IDS) mixed[t] += TUNE.emphasis * (r - 0.6) / 0.4;
+    } else if (st.tickNotes === 1) {
+      if (r > 0.85) // strongest accents may become a 2-chord
+        for (const t of NOTE_START_IDS) mixed[t] += TUNE.chord * (r - 0.85) / 0.15;
+      else
+        for (const t of NOTE_START_IDS) mixed[t] -= TUNE.chordPenalty;
+    } else { // 3rd+ note on a tick: strongly discouraged
+      for (const t of NOTE_START_IDS) mixed[t] -= TUNE.chordPenalty * st.tickNotes;
+    }
+    // stream: once two equal even gaps establish a spacing, nudge the next
+    // advance to repeat it so runs sustain (human runs avg ~5, max 30+)
+    if (streamGap && st.tickNotes === 0) {
+      const dtok = TID["d_" + streamGap];
+      if (dtok !== undefined) mixed[dtok] += TUNE.stream;
     }
     // avoid long button droughts: always on, but weaker in quiet sections
     // so breaks stay sparse; an active laser counts as full-strength music
@@ -670,8 +700,13 @@ async function generate(opts) {
           mixed[t] += Math.min(3, (gap - MEASURE) / MEASURE) * TUNE.drought * w;
       }
     }
-    // pattern induction: continue an established lane cycle (trill/stair/...)
+    // pattern induction, in priority order. The two motif families that
+    // dominate real charts (mined from the corpus): periodic cycles — trills
+    // (period 2) and longer loops — and monotonic adjacent-BT runs (stairs,
+    // the single most common motif). Cycles are checked first so a trill
+    // isn't hijacked by the stair rule mid-alternation.
     const L = recentLanes.length;
+    let matched = false;
     for (const p of [2, 3, 4, 1]) {
       if (L < 2 * p) continue;
       let ok = true;
@@ -680,7 +715,25 @@ async function generate(opts) {
       if (ok) {
         for (const t of laneStartIds(recentLanes[L - p]))
           mixed[t] += TUNE.pattern * (p === 1 ? 0.5 : 1);
+        matched = true;
         break;
+      }
+    }
+    if (!matched) {
+      // stair: last two consecutive BT notes stepped one adjacent lane in a
+      // direction -> boost the lane that continues the run, bouncing at the
+      // A/D walls (ABCD -> back down, and vice versa)
+      let b = -1, a = -1;
+      for (let i = L - 1; i >= 0; i--) {
+        if (recentLanes[i] >= 4) continue; // BT only
+        if (b < 0) b = recentLanes[i];
+        else { a = recentLanes[i]; break; }
+      }
+      if (a >= 0 && (b - a === 1 || b - a === -1)) {
+        const dir = b - a;
+        let next = b + dir;
+        if (next < 0 || next > 3) next = b - dir; // turnaround at the edge
+        for (const t of laneStartIds(next)) mixed[t] += TUNE.stair;
       }
     }
   };
@@ -722,6 +775,12 @@ async function generate(opts) {
       lastButtonPos = pos;
       recentLanes.push(laneK);
       if (recentLanes.length > 12) recentLanes.shift();
+      if (lastNotePos >= 0 && pos > lastNotePos) {
+        const g = pos - lastNotePos;
+        streamGap = (g === lastGap && STREAM_GAPS.has(g)) ? g : 0;
+        lastGap = g;
+      }
+      if (pos !== lastNotePos) lastNotePos = pos;
     }
     const name = VOCAB[t];
     if (name === "bar") pos = (Math.floor(pos / MEASURE) + 1) * MEASURE;
